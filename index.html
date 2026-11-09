@@ -1,0 +1,1474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Interactive McCabe-Thiele construction for binary distillation: feed line, rectifying and stripping lines, stage stepping, minimum reflux and minimum stages. Loads Aspen Plus binary analysis (T-x-y) results.">
+<title>McCabe-Thiele Method</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<style>
+/* Same design language as the Binary VLE Diagrams page: control strip on top, one bordered stage
+   (diagram left, step guide right), data bar, then the stage table and the equation sheet. */
+:root {
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --well: #f3f5f8;
+  --ink: #17202c;
+  --muted: #5a6577;
+  --rule: #d4dae3;
+  --grid: #edf0f4;
+  --ghost: #b4bdca;
+  --liquid: #1f4fd6;          /* rectifying section */
+  --liquid-soft: rgba(31, 79, 214, 0.10);
+  --vapor: #0b8740;           /* stripping section */
+  --vapor-soft: rgba(11, 135, 64, 0.11);
+  --feed: #b5560b;            /* feed / q-line */
+  --feed-soft: rgba(181, 86, 11, 0.11);
+  --stage: #c8202f;           /* stage steps */
+  --focus: #2f6bff;
+  --warn: #a4460c;
+  --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --r: 10px;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-inline: 20px;
+  padding-block: 22px 40px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+.wrap > * { min-width: 0; }
+.controls > .ctl { max-width: 100%; }
+.card-body > *, .readout > *, .plot-col > *, .eqcard > *, details.card { min-width: 0; }
+
+/* Header */
+.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; }
+.top h1 { margin: 0; font-size: 1.45rem; font-weight: 600; letter-spacing: -0.01em; text-wrap: balance; }
+.top .sub { margin: 2px 0 0; color: var(--muted); font-size: 0.92rem; }
+.info-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+
+button, .btn {
+  font: inherit; font-size: 0.9rem; font-weight: 500; color: var(--ink);
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
+  padding: 6px 14px; cursor: pointer; line-height: 1.3;
+}
+button:hover, .btn:hover { border-color: var(--muted); }
+button:focus-visible, .btn:focus-within, input[type="range"]:focus-visible, input[type="number"]:focus-visible {
+  outline: 2px solid var(--focus); outline-offset: 2px;
+}
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+button.primary:hover { background: #2a3546; }
+button.sm { padding: 3px 10px; font-size: 0.84rem; }
+
+/* Controls */
+.controls {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px 26px;
+  padding: 14px 18px; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r);
+}
+.controls + .controls { margin-top: -6px; }
+.ctl { display: grid; gap: 6px; min-width: 0; }
+.ctl-label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.ctl-label i { text-transform: none; letter-spacing: 0; font-family: var(--font-mono); font-style: normal; font-weight: 500; font-size: 0.8rem; color: var(--ink); }
+.group-title {
+  flex-basis: 100%; margin: 0 0 -6px; font-size: 0.78rem; font-weight: 600; color: var(--ink);
+  display: flex; align-items: center; gap: 10px;
+}
+.group-title::after { content: ""; flex: 1; height: 1px; background: var(--grid); }
+.seg {
+  display: inline-flex; flex-wrap: wrap; border: 1px solid var(--rule); border-radius: 8px;
+  padding: 2px; gap: 2px; background: var(--well); justify-self: start;
+}
+.seg input { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
+.seg label {
+  padding: 4px 12px; border-radius: 6px; font-size: 0.9rem; font-weight: 500; color: var(--muted);
+  cursor: pointer; white-space: nowrap; user-select: none;
+}
+.seg label:hover { color: var(--ink); }
+.seg input:checked + label { background: var(--ink); color: var(--panel); }
+.seg input:focus-visible + label { outline: 2px solid var(--focus); outline-offset: 1px; }
+.seg input:disabled + label { opacity: 0.4; cursor: not-allowed; }
+.seg.sm label { padding: 2px 9px; font-size: 0.82rem; }
+
+.num-row { display: flex; align-items: center; gap: 10px; }
+.ctl-num { flex: 0 1 200px; min-width: 150px; }
+.ctl-num.wide { flex-basis: 230px; }
+input[type="range"] {
+  -webkit-appearance: none; appearance: none; width: 100%; min-width: 90px; height: 18px;
+  background: transparent; margin: 0; cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--rule); }
+input[type="range"]::-moz-range-track { height: 4px; border-radius: 2px; background: var(--rule); }
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--ink); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--ink); margin-top: -6px;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 50%; background: var(--ink); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--ink);
+}
+input[type="number"] {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 0.9rem; color: var(--ink);
+  width: 9.6ch; padding: 3px 4px 3px 6px; border: 1px solid var(--rule); border-radius: 6px; background: var(--panel);
+}
+input[type="number"].short { width: 6.5ch; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: 0; }
+
+/* Stage */
+.stage {
+  display: grid; grid-template-columns: minmax(0, 1fr) 370px;
+  background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); overflow: hidden;
+}
+.plot-col { min-width: 0; padding: 14px 16px 10px; display: grid; gap: 8px; align-content: start; }
+.plot-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.stepper { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.stepper .seg label { padding: 3px 10px; font-family: var(--font-mono); font-size: 0.86rem; }
+.zoomrow { display: flex; align-items: center; gap: 8px; }
+.zoomrow .ctl-label { font-size: 0.68rem; }
+#plotBox { width: 100%; min-width: 0; position: relative; }
+#plot { display: block; touch-action: none; user-select: none; -webkit-user-select: none; margin: 0 auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 0.8rem; color: var(--muted); padding: 2px 4px 0; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.legend svg { display: block; }
+.hint { margin: 0; color: var(--muted); font-size: 0.84rem; }
+
+/* SVG styles */
+.grid { stroke: var(--grid); stroke-width: 1; }
+.frame { fill: none; stroke: var(--muted); stroke-width: 1; }
+.tick { stroke: var(--muted); stroke-width: 1; }
+.tl { fill: var(--muted); font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.axt { fill: var(--ink); font-family: var(--font-sans); font-size: 13.5px; }
+.diag { stroke: var(--muted); stroke-width: 1.1; fill: none; }
+.eqc { fill: none; stroke: var(--ink); stroke-width: 2.4; stroke-linejoin: round; }
+.eqp { fill: none; stroke: var(--ink); stroke-width: 1.4; stroke-dasharray: 2 3; }
+.ql { stroke: var(--feed); stroke-width: 2.2; fill: none; }
+.ql-ext { stroke: var(--feed); stroke-width: 1.2; stroke-dasharray: 5 4; fill: none; opacity: 0.7; }
+.rl { stroke: var(--liquid); stroke-width: 2.2; fill: none; }
+.rl-ext { stroke: var(--liquid); stroke-width: 1.2; stroke-dasharray: 5 4; fill: none; opacity: 0.7; }
+.sl { stroke: var(--vapor); stroke-width: 2.2; fill: none; }
+.rmin { stroke: var(--muted); stroke-width: 1.3; stroke-dasharray: 7 4; fill: none; }
+.stp { stroke: var(--stage); stroke-width: 1.7; fill: none; stroke-linejoin: miter; }
+.stp-feed { stroke-width: 2.6; }
+.stp-lab { fill: var(--stage); font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
+.ptlab { font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; }
+.ptlab.d { fill: var(--liquid); } .ptlab.b { fill: var(--vapor); } .ptlab.f { fill: var(--feed); } .ptlab.k { fill: var(--muted); }
+.ix { fill: var(--panel); stroke: var(--ink); stroke-width: 1.5; }
+.drop { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
+.h { stroke-width: 2.5; fill: var(--panel); cursor: grab; outline: none; }
+.h.d { stroke: var(--liquid); } .h.b { stroke: var(--vapor); } .h.f { stroke: var(--feed); }
+.h.q { stroke: var(--feed); fill: var(--feed); } .h.r { stroke: var(--liquid); fill: var(--liquid); }
+.h:focus-visible { stroke: var(--focus); stroke-width: 3.5; }
+#plot.dragging, #plot.dragging .h { cursor: grabbing; }
+.warnzone { fill: rgba(200, 32, 47, 0.07); }
+
+/* Readout */
+.readout { border-left: 1px solid var(--rule); padding: 16px 18px 18px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.step-kicker { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.step-title { margin: 0; font-size: 1.12rem; font-weight: 600; }
+.step-text { margin: 0; font-size: 0.9rem; }
+.todo { margin: 0; font-size: 0.86rem; color: var(--ink); background: var(--well); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 10px; }
+.todo b { font-weight: 600; }
+.eqbox { background: var(--well); border: 1px solid var(--rule); border-radius: 8px; padding: 6px 10px; overflow-x: auto; display: grid; gap: 2px; }
+.eqbox .katex-display { margin: 0.35em 0; }
+.eqbox .katex { font-size: 1.02em; }
+.eqfallback { font-family: var(--font-mono); font-size: 0.84rem; white-space: pre-wrap; }
+.kv { margin: 0; display: grid; gap: 0; border-top: 1px solid var(--rule); }
+.kv > div { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--grid); }
+.kv dt { color: var(--muted); font-size: 0.86rem; }
+.kv dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 0.88rem; text-align: right; }
+.kv dd.d { color: var(--liquid); } .kv dd.b { color: var(--vapor); } .kv dd.f { color: var(--feed); } .kv dd.s { color: var(--stage); }
+.kv-title { margin: 6px 0 -6px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.stagectl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.stagectl output { font-family: var(--font-mono); font-size: 0.95rem; font-weight: 500; min-width: 4ch; text-align: center; }
+.alert { margin: 0; font-size: 0.86rem; color: var(--stage); background: rgba(200, 32, 47, 0.06); border: 1px solid rgba(200, 32, 47, 0.25); border-radius: 8px; padding: 7px 10px; }
+.alert:empty { display: none; }
+body.hide-ans .ans { color: transparent !important; text-shadow: 0 0 7px rgba(23, 32, 44, 0.55); user-select: none; }
+body.hide-ans .stp-lab { display: none; }
+body.hide-ans table.st tbody td { color: transparent; text-shadow: 0 0 7px rgba(23, 32, 44, 0.55); user-select: none; }
+
+/* Data bar */
+.databar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: 0.86rem; color: var(--muted); }
+.databar .src { min-width: 0; flex: 1 1 360px; }
+.databar .src b { color: var(--ink); font-weight: 500; font-family: var(--font-mono); font-size: 0.84rem; word-break: break-all; }
+.databar .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.btn input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.btn { position: relative; display: inline-block; }
+.msg { flex-basis: 100%; margin: 0; font-size: 0.84rem; }
+#warn { color: var(--warn); }
+.msg:empty { display: none; }
+
+/* Cards below the stage */
+details.card { background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); }
+details.card > summary {
+  cursor: pointer; list-style: none; padding: 12px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  font-weight: 600; font-size: 1rem;
+}
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary .chev { color: var(--muted); font-family: var(--font-mono); font-size: 0.9rem; transition: transform 0.12s; }
+details.card[open] > summary .chev { transform: rotate(90deg); }
+details.card > summary .sum-sub { font-weight: 400; color: var(--muted); font-size: 0.86rem; margin-left: 8px; }
+.card-body { padding: 0 18px 18px; display: grid; gap: 12px; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; }
+table.st { border-collapse: collapse; width: 100%; font-size: 0.86rem; }
+table.st th { text-align: right; font-weight: 600; font-size: 0.74rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); background: var(--well); padding: 6px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+table.st th:first-child, table.st td:first-child, table.st th:nth-child(3), table.st td:nth-child(3) { text-align: left; }
+table.st td { text-align: right; padding: 4px 10px; border-bottom: 1px solid var(--grid); font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.st tr.feedrow td { background: var(--feed-soft); }
+table.st td.sec-R { color: var(--liquid); font-family: var(--font-sans); }
+table.st td.sec-S { color: var(--vapor); font-family: var(--font-sans); }
+table.st td.sec-C { color: var(--muted); font-family: var(--font-sans); }
+.tbl-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: space-between; }
+.tbl-note { margin: 0; color: var(--muted); font-size: 0.84rem; max-width: 80ch; }
+
+.eqsheet { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 12px; }
+.eqcard { border: 1px solid var(--rule); border-radius: 8px; padding: 10px 14px 12px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.eqcard h3 { margin: 0; font-size: 0.92rem; font-weight: 600; display: flex; gap: 8px; align-items: baseline; }
+.eqcard h3 .n { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+.eqcard p { margin: 0; font-size: 0.86rem; color: var(--muted); }
+.eqcard .eqline { overflow-x: auto; overflow-y: hidden; }
+.eqcard .eqline .katex-display { margin: 0.25em 0; }
+.eqcard .live { background: var(--well); border-radius: 6px; padding: 2px 8px; }
+.eqcard .live::before { content: "your numbers"; display: block; font-size: 0.66rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding-top: 4px; }
+.eqcard.hl { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+
+/* Dialogs */
+dialog.dlg {
+  border: 1px solid var(--rule); border-radius: 12px; padding: 0; width: min(760px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px); background: var(--panel); color: var(--ink);
+}
+dialog.dlg::backdrop { background: rgba(10, 14, 20, 0.45); }
+.dlg-inner { padding: 18px 22px 22px; display: grid; gap: 10px; }
+.dlg-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.dlg-head h2 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+.dlg-x { padding: 2px 10px; font-size: 1.1rem; line-height: 1.2; }
+.dlg p, .dlg li { max-width: 68ch; font-size: 0.93rem; }
+.dlg p { margin: 0; }
+.dlg ul, .dlg ol { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; }
+.dlg h3 { margin: 6px 0 0; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.dlg code, .dlg kbd { font-family: var(--font-mono); font-size: 0.85rem; }
+.dlg a { color: var(--liquid); }
+.dlg textarea { width: 100%; min-height: 220px; font-family: var(--font-mono); font-size: 0.8rem; border: 1px solid var(--rule); border-radius: 8px; padding: 8px; resize: vertical; }
+.dlg .acts { display: flex; gap: 8px; justify-content: flex-end; }
+.c-d { color: var(--liquid); font-weight: 500; } .c-b { color: var(--vapor); font-weight: 500; }
+.c-f { color: var(--feed); font-weight: 500; } .c-s { color: var(--stage); font-weight: 500; }
+
+@media (max-width: 960px) {
+  .stage { grid-template-columns: minmax(0, 1fr); }
+  .readout { border-left: 0; border-top: 1px solid var(--rule); }
+}
+@media (max-width: 520px) {
+  .wrap { padding-inline: 16px; padding-block: 16px 24px; }
+  .controls { padding: 12px 14px; gap: 12px 18px; }
+  .plot-col { padding: 12px 8px 8px; }
+  .top h1 { font-size: 1.25rem; }
+  .ctl-num { flex-basis: 100%; }
+  .eqsheet { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .seg label, button { transition: background-color 0.12s, color 0.12s, border-color 0.12s; }
+}
+@media print {
+  .controls, .databar, .info-btns, .plot-head, .stagectl { display: none !important; }
+  details.card { break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1 id="title">McCabe-Thiele Method</h1>
+      <p class="sub" id="subtitle">Design a binary distillation column by hand, step by step, from equilibrium data.</p>
+    </div>
+    <nav class="info-btns" aria-label="Help">
+      <button type="button" data-dlg="dlg-directions">Directions</button>
+      <button type="button" data-dlg="dlg-details">Details</button>
+      <button type="button" data-dlg="dlg-about">About</button>
+    </nav>
+  </header>
+
+  <section class="controls" aria-label="Equilibrium data">
+    <div class="ctl">
+      <span class="ctl-label" id="lbl-src">Equilibrium curve</span>
+      <div class="seg" role="radiogroup" aria-labelledby="lbl-src">
+        <input type="radio" name="src" id="src-data" value="data" checked><label for="src-data">Aspen data</label>
+        <input type="radio" name="src" id="src-alpha" value="alpha"><label for="src-alpha">Constant α</label>
+      </div>
+    </div>
+    <div class="ctl" id="ctl-series">
+      <span class="ctl-label" id="lbl-series">Pressure</span>
+      <div class="seg" role="radiogroup" aria-labelledby="lbl-series" id="seriesSeg"></div>
+    </div>
+    <div class="ctl ctl-num" id="ctl-alpha" hidden>
+      <span class="ctl-label">Relative volatility <i>α</i></span>
+      <div class="num-row"><input type="range" id="alpha-r" min="1.05" max="10" step="0.05"><input type="number" id="alpha-n" min="1.01" max="50" step="0.05"></div>
+    </div>
+    <div class="ctl">
+      <span class="ctl-label">Light key (x-axis)</span>
+      <span id="lightName" style="font-family:var(--font-mono);font-size:0.92rem;font-weight:500;padding:4px 0">–</span>
+    </div>
+  </section>
+
+  <section class="controls" aria-label="Column specifications">
+    <p class="group-title">Column specifications <span style="font-weight:400;color:var(--muted)">(mole fractions of the light key)</span></p>
+    <div class="ctl ctl-num">
+      <span class="ctl-label"><span class="sw" style="background:var(--feed)"></span>Feed <i>z<sub>F</sub></i></span>
+      <div class="num-row"><input type="range" id="zF-r" min="0.01" max="0.99" step="0.001"><input type="number" id="zF-n" min="0.001" max="0.999" step="0.001"></div>
+    </div>
+    <div class="ctl ctl-num">
+      <span class="ctl-label"><span class="sw" style="background:var(--liquid)"></span>Distillate <i>x<sub>D</sub></i></span>
+      <div class="num-row"><input type="range" id="xD-r" min="0.5" max="0.9995" step="0.0005"><input type="number" id="xD-n" min="0.01" max="0.9999" step="0.0005"></div>
+    </div>
+    <div class="ctl ctl-num">
+      <span class="ctl-label"><span class="sw" style="background:var(--vapor)"></span>Bottoms <i>x<sub>B</sub></i></span>
+      <div class="num-row"><input type="range" id="xB-r" min="0.0005" max="0.5" step="0.0005"><input type="number" id="xB-n" min="0.0001" max="0.99" step="0.0005"></div>
+    </div>
+    <div class="ctl ctl-num">
+      <span class="ctl-label">Feed quality <i>q</i></span>
+      <div class="num-row"><input type="range" id="q-r" min="-1" max="2.5" step="0.01"><input type="number" id="q-n" min="-5" max="5" step="0.01"></div>
+    </div>
+    <div class="ctl ctl-num">
+      <span class="ctl-label">Reflux ratio <i>R = L/D</i></span>
+      <div class="num-row"><input type="range" id="R-r" min="0.05" max="8" step="0.01"><input type="number" id="R-n" min="0.01" max="100" step="0.01"></div>
+    </div>
+    <p class="group-title">Options</p>
+    <div class="ctl">
+      <span class="ctl-label">Feed flow <i>F</i> (kmol/h)</span>
+      <input type="number" id="F-n" min="0.001" step="1" class="short" style="width:9ch">
+    </div>
+    <div class="ctl ctl-num">
+      <span class="ctl-label">Murphree efficiency <i>E<sub>MV</sub></i></span>
+      <div class="num-row"><input type="range" id="E-r" min="0.3" max="1" step="0.01"><input type="number" id="E-n" min="0.1" max="1" step="0.01" class="short"></div>
+    </div>
+    <div class="ctl">
+      <span class="ctl-label" id="lbl-cond">Condenser</span>
+      <div class="seg" role="radiogroup" aria-labelledby="lbl-cond">
+        <input type="radio" name="cond" id="cond-t" value="total" checked><label for="cond-t">Total</label>
+        <input type="radio" name="cond" id="cond-p" value="partial"><label for="cond-p">Partial</label>
+      </div>
+    </div>
+    <div class="ctl">
+      <span class="ctl-label" id="lbl-feedmode">Feed stage</span>
+      <div class="num-row">
+        <div class="seg" role="radiogroup" aria-labelledby="lbl-feedmode">
+          <input type="radio" name="fm" id="fm-opt" value="opt" checked><label for="fm-opt">Optimal</label>
+          <input type="radio" name="fm" id="fm-spec" value="spec"><label for="fm-spec">Fixed</label>
+        </div>
+        <input type="number" id="Nf-n" min="1" max="200" step="1" class="short" aria-label="Feed stage number, counted from the top" hidden>
+      </div>
+    </div>
+  </section>
+
+  <main class="stage">
+    <div class="plot-col">
+      <div class="plot-head">
+        <div class="stepper">
+          <span class="ctl-label" id="lbl-step">Step</span>
+          <button type="button" class="sm" id="prevBtn" aria-label="Previous step">‹</button>
+          <div class="seg" role="radiogroup" aria-labelledby="lbl-step" id="stepSeg">
+            <input type="radio" name="step" id="st1" value="1" checked><label for="st1" title="Equilibrium curve">1</label>
+            <input type="radio" name="step" id="st2" value="2"><label for="st2" title="Feed and product compositions">2</label>
+            <input type="radio" name="step" id="st3" value="3"><label for="st3" title="Feed line (q-line)">3</label>
+            <input type="radio" name="step" id="st4" value="4"><label for="st4" title="Rectifying line">4</label>
+            <input type="radio" name="step" id="st5" value="5"><label for="st5" title="Stripping line">5</label>
+            <input type="radio" name="step" id="st6" value="6"><label for="st6" title="Step off stages">6</label>
+          </div>
+          <button type="button" class="sm primary" id="nextBtn">Next ›</button>
+        </div>
+        <div class="zoomrow">
+          <span class="ctl-label" id="lbl-zoom">View</span>
+          <div class="seg sm" role="radiogroup" aria-labelledby="lbl-zoom">
+            <input type="radio" name="zoom" id="zm-full" value="full" checked><label for="zm-full">Full</label>
+            <input type="radio" name="zoom" id="zm-top" value="top"><label for="zm-top">Top end</label>
+            <input type="radio" name="zoom" id="zm-bot" value="bot"><label for="zm-bot">Bottom end</label>
+          </div>
+        </div>
+      </div>
+      <div id="plotBox">
+        <svg id="plot" role="img" aria-label="McCabe-Thiele diagram">
+          <defs><clipPath id="clip"><rect id="clipRect" x="0" y="0" width="10" height="10"></rect></clipPath></defs>
+          <g id="gStatic"></g>
+          <g id="gDyn" clip-path="url(#clip)"></g>
+          <g id="gLab"></g>
+          <g id="gHandles"></g>
+        </svg>
+      </div>
+      <div class="legend" id="legend"></div>
+      <p class="hint" id="hint">Drag the dots on the diagram, or type values in the boxes above. Click a dot and use the arrow keys for fine steps.</p>
+    </div>
+
+    <aside class="readout">
+      <div>
+        <div class="step-kicker" id="stepKicker">Step 1 of 6</div>
+        <h2 class="step-title" id="stepTitle">–</h2>
+      </div>
+      <p class="step-text" id="stepText"></p>
+      <p class="todo" id="stepTodo"></p>
+      <div class="stagectl" id="stageCtl" hidden>
+        <button type="button" class="sm" id="stMinus" aria-label="Remove one stage">− Stage</button>
+        <output id="stCount">0</output>
+        <button type="button" class="sm primary" id="stPlus">+ Add stage</button>
+        <button type="button" class="sm" id="stAll">All stages</button>
+      </div>
+      <div class="eqbox" id="stepEq"></div>
+      <p class="alert" id="alert" role="status"></p>
+      <dl class="kv" id="stepKv"></dl>
+      <div class="kv-title"><span>Design summary</span>
+        <div class="seg sm" role="radiogroup" aria-label="Show or hide answers">
+          <input type="radio" name="ans" id="ans-show" value="show" checked><label for="ans-show">Show</label>
+          <input type="radio" name="ans" id="ans-hide" value="hide"><label for="ans-hide">Hide answers</label>
+        </div>
+      </div>
+      <dl class="kv" id="sumKv"></dl>
+    </aside>
+  </main>
+
+  <section class="databar" aria-label="Data source">
+    <div class="src">Data: <b id="dataName">–</b> <span id="dataSummary"></span></div>
+    <div class="acts">
+      <label class="btn" for="fileInput">Load .xlsx / .csv<input type="file" id="fileInput" accept=".xlsx,.xls,.xlsm,.csv,.txt,.tsv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain"></label>
+      <button type="button" data-dlg="dlg-paste">Paste table</button>
+      <button type="button" id="restoreBtn" hidden>Restore sample data</button>
+    </div>
+    <p class="msg" id="status" role="status"></p>
+    <p class="msg" id="warn"></p>
+  </section>
+
+  <details class="card" id="tableCard" open>
+    <summary><span>Stage-by-stage results <span class="sum-sub" id="tableSub"></span></span><span class="chev">›</span></summary>
+    <div class="card-body">
+      <div class="tbl-acts">
+        <p class="tbl-note" id="tableNote">Liquid x<sub>n</sub> and vapor y<sub>n</sub> leave stage n. The temperature is the bubble point of x<sub>n</sub> read from the T-x-y data, so you can compare it with the Aspen RadFrac temperature profile.</p>
+        <button type="button" class="sm" id="csvBtn">Download table (.csv)</button>
+      </div>
+      <div class="tablewrap"><table class="st" id="stageTable"></table></div>
+    </div>
+  </details>
+
+  <details class="card" id="eqCard" open>
+    <summary><span>Equations used <span class="sum-sub">with the numbers from the current design, so you can check every line by hand</span></span><span class="chev">›</span></summary>
+    <div class="card-body"><div class="eqsheet" id="eqSheet"></div></div>
+  </details>
+</div>
+
+<dialog class="dlg" id="dlg-directions" aria-labelledby="h-directions">
+  <div class="dlg-inner">
+    <div class="dlg-head"><h2 id="h-directions">Directions</h2><button type="button" class="dlg-x" data-close aria-label="Close">×</button></div>
+    <p>The McCabe-Thiele method finds the number of equilibrium stages a binary column needs, with nothing more than the x–y equilibrium curve and two straight mass-balance lines. Work through the six steps with the <b>Step</b> buttons above the diagram, or press <b>Next</b>.</p>
+    <h3>The six steps</h3>
+    <ol>
+      <li><b>Equilibrium curve.</b> Plot y* against x for the light (more volatile) component at the column pressure, together with the diagonal y = x.</li>
+      <li><b>Compositions.</b> Mark <span class="c-b">x<sub>B</sub></span>, <span class="c-f">z<sub>F</sub></span> and <span class="c-d">x<sub>D</sub></span> on the diagonal.</li>
+      <li><b>Feed line.</b> Draw the <span class="c-f">q-line</span> from (z<sub>F</sub>, z<sub>F</sub>) with slope q/(q−1).</li>
+      <li><b>Rectifying line.</b> Draw the <span class="c-d">rectifying line</span> from (x<sub>D</sub>, x<sub>D</sub>) to the y-axis intercept x<sub>D</sub>/(R+1).</li>
+      <li><b>Stripping line.</b> Join (x<sub>B</sub>, x<sub>B</sub>) to the point where the rectifying line meets the q-line.</li>
+      <li><b>Stages.</b> Step off <span class="c-s">stages</span> from the top: horizontally to the equilibrium curve, then vertically to the operating line, until x ≤ x<sub>B</sub>.</li>
+    </ol>
+    <h3>Use the diagram</h3>
+    <ul>
+      <li>Drag the dots: the three dots on the diagonal set the compositions, the filled <span class="c-f">amber dot</span> turns the q-line, and the filled <span class="c-d">blue dot</span> on the y-axis sets the reflux ratio. Or type values in the boxes above. Click a dot (or Tab to it) and use the arrow keys; hold Shift for larger steps.</li>
+      <li>In step 6, add stages one at a time with <b>+ Add stage</b>, or show them all. Count them yourself first: choose <b>Hide answers</b> to blur the computed results.</li>
+      <li><b>View</b> zooms into the top or bottom end of the diagram, where high-purity stages get very small.</li>
+      <li><b>Feed stage: Fixed</b> lets you put the feed on any stage (for example the stage used in your Aspen model) and see what happens when it is not the optimal one.</li>
+      <li><b>Murphree efficiency</b> below 1 draws a dashed pseudo-equilibrium curve and steps to it instead of the true curve, which gives real trays instead of equilibrium stages.</li>
+    </ul>
+    <h3>Load your own binary system from Aspen Plus</h3>
+    <ol>
+      <li>In Aspen Plus, run a <b>Binary</b> analysis (Home tab, Analysis group) of type <b>Txy</b> at your column pressure. Several pressures in one run are fine; you can switch between them here.</li>
+      <li>Open the results, select the whole results table including the header row (PRES, MOLEFRAC …, TOTAL TEMP, VAPOR MOLEFRAC …) and the units row, and copy it.</li>
+      <li>Either click <b>Paste table</b> and paste it directly, or paste it into an Excel sheet, save it as .xlsx and click <b>Load .xlsx / .csv</b>. The same workbook you use for the Binary VLE Diagrams page works here.</li>
+      <li>Data from other sources also works: a .csv or pasted table with two columns x, y (and optionally a third column T), with x and y the mole fractions of the same component.</li>
+    </ol>
+    <h3>Example loaded at start</h3>
+    <p>The sample is methanol–water from an Aspen Plus binary analysis (NRTL). The starting specifications are rounded from the methanol column COL2 of the Aspen demo (feed about 0.671 methanol, distillate 99.7 wt % ≈ 0.9947 mole fraction, bottoms ≈ 0.017, saturated-liquid feed, R ≈ 0.97). Compare your stage count and temperatures with the RadFrac results, and think about why they differ.</p>
+  </div>
+</dialog>
+
+<dialog class="dlg" id="dlg-details" aria-labelledby="h-details">
+  <div class="dlg-inner">
+    <div class="dlg-head"><h2 id="h-details">Details</h2><button type="button" class="dlg-x" data-close aria-label="Close">×</button></div>
+    <h3>Assumptions of the method</h3>
+    <ul>
+      <li><b>Constant molar overflow (CMO):</b> the liquid and vapor molar flows are constant within each section. This holds when both components have similar molar heats of vaporization and heat losses and heats of mixing are small. That is why the operating lines are straight.</li>
+      <li>Constant column pressure: one x–y curve is used for the whole column.</li>
+      <li>Each stage is an equilibrium stage (unless you set a Murphree efficiency below 1). The partial reboiler counts as an equilibrium stage. A total condenser does not; a partial condenser does.</li>
+    </ul>
+    <h3>How the page draws the equilibrium curve</h3>
+    <p>No thermodynamic model runs here. The y–x points from the data are joined by a monotone cubic (PCHIP) interpolation, which passes through every data point and adds no wiggles. With <b>Constant α</b> the curve is y = αx / (1 + (α−1)x).</p>
+    <h3>Feed stage</h3>
+    <p>With <b>Optimal</b>, the page switches from the rectifying to the stripping line on the first stage whose liquid x<sub>n</sub> lies below the intersection of the two operating lines. That stage is the feed stage, and it gives the fewest stages. With <b>Fixed</b>, the switch happens on the stage you choose. If the feed is too high or too low, the steps pinch against the equilibrium curve and the column may never reach x<sub>B</sub>.</p>
+    <h3>Minimum reflux and minimum stages</h3>
+    <p>R<sub>min</sub> is the lowest reflux ratio at which both operating lines still lie on or below the equilibrium curve everywhere between x<sub>B</sub> and x<sub>D</sub>. The page finds it by bisection, so it also catches a tangent pinch away from the feed (for example ethanol–water). N<sub>min</sub> is stepped off between the curve and the diagonal (total reflux), and it is also given by the Fenske equation with the geometric-mean α. The Gilliland correlation (Molokanov form) gives a shortcut estimate of N from R, R<sub>min</sub> and N<sub>min</sub>, the same method Aspen's DSTWU block uses.</p>
+    <h3>Stage numbers here and in Aspen Plus</h3>
+    <p>Here, stages are counted from the top, and stage 1 is the top equilibrium stage. Aspen RadFrac counts the condenser as stage 1 and the reboiler as the last stage. With a total condenser, McCabe-Thiele stage n is RadFrac stage n + 1, so NSTAGE = N + 1. With a partial condenser the condenser is already McCabe-Thiele stage 1, so NSTAGE = N.</p>
+    <h3>Why the result differs from RadFrac</h3>
+    <p>RadFrac solves full energy balances on every stage, so its flows change from stage to stage; McCabe-Thiele assumes CMO. For methanol–water, the heat of vaporization of water (about 40.7 kJ/mol at its boiling point) is higher than that of methanol (about 35.3 kJ/mol), so the vapor flow in the real column changes along the column and the two methods give somewhat different stage counts.</p>
+  </div>
+</dialog>
+
+<dialog class="dlg" id="dlg-about" aria-labelledby="h-about">
+  <div class="dlg-inner">
+    <div class="dlg-head"><h2 id="h-about">About</h2><button type="button" class="dlg-x" data-close aria-label="Close">×</button></div>
+    <p>A companion to the <a href="https://ng-hung-nguyen.github.io/Thermodynamic-VLE-binary-mixture/" target="_blank" rel="noopener">Binary VLE Diagrams</a> page, built for a course that uses Aspen Plus for distillation design. It shows the hand calculation behind a column model, so the simulator is less of a black box.</p>
+    <p>The step-by-step construction follows the idea of the <a href="https://demonstrations.wolfram.com/ConstructAMcCabeThieleDiagramForDistillation/" target="_blank" rel="noopener">Construct a McCabe-Thiele Diagram for Distillation</a> Wolfram Demonstration (LearnChemE, University of Colorado Boulder).</p>
+    <p>The page is a single self-contained HTML file. Equations are typeset with KaTeX; the spreadsheet reader (SheetJS) loads only when you open an .xlsx file. Nothing you load leaves your browser.</p>
+  </div>
+</dialog>
+
+<dialog class="dlg" id="dlg-paste" aria-labelledby="h-paste">
+  <div class="dlg-inner">
+    <div class="dlg-head"><h2 id="h-paste">Paste equilibrium data</h2><button type="button" class="dlg-x" data-close aria-label="Close">×</button></div>
+    <p>Paste the Aspen Plus <b>Txy</b> binary-analysis results table (with its header and units rows), or any table with columns x, y and optionally T. Columns may be separated by tabs, commas or semicolons.</p>
+    <textarea id="pasteArea" spellcheck="false" placeholder="PRES	MOLEFRAC METHANOL	TOTAL TEMP	…	VAPOR MOLEFRAC METHANOL	…&#10;bar		C		&#10;1	0	99.6	…"></textarea>
+    <div class="acts"><button type="button" data-close>Cancel</button><button type="button" class="primary" id="pasteGo">Use this data</button></div>
+  </div>
+</dialog>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const XLSX_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+  const MAXN = 150;
+
+  // ---- Sample: Aspen Plus binary analysis, methanol-water, NRTL (x, y = mole fraction of comps[0]) ----
+  const SAMPLE = {"name":"MeOH-H2O Txy (Aspen Plus, NRTL)","comps":["H2O","METHANOL"],"kind":"Txy","fixedUnit":"atm","varUnit":"C","series":[{"value":1,"x":[0,0.02,0.04,0.06,0.08,0.1,0.12,0.14,0.16,0.18,0.2,0.22,0.24,0.26,0.28,0.3,0.32,0.34,0.36,0.38,0.4,0.42,0.44,0.46,0.48,0.5,0.52,0.54,0.56,0.58,0.6,0.62,0.64,0.66,0.68,0.7,0.72,0.74,0.76,0.78,0.8,0.82,0.84,0.86,0.88,0.9,0.92,0.94,0.96,0.98,1],"y":[0,0.00804664,0.0160932,0.0241418,0.0321946,0.0402538,0.0483224,0.0564034,0.0645002,0.0726169,0.0807577,0.0889275,0.0971318,0.1053768,0.1136693,0.1220169,0.1304283,0.1389132,0.1474824,0.1561481,0.1649241,0.1738259,0.1828711,0.1920796,0.2014741,0.2110803,0.2209277,0.2310501,0.2414865,0.2522819,0.2634886,0.2751676,0.2873904,0.3002416,0.3138216,0.3282505,0.3436737,0.3602664,0.3782468,0.3978841,0.4195177,0.4435809,0.4706359,0.5014254,0.5369523,0.5786048,0.6283626,0.6891525,0.7654964,0.8647832,1],"v":[64.53476,64.83953,65.14636,65.45532,65.76649,66.07998,66.39589,66.71434,67.03547,67.35942,67.68636,68.01648,68.34997,68.68708,69.02806,69.3732,69.72283,70.07731,70.43704,70.8025,71.1742,71.55272,71.93873,72.33297,72.73629,73.14966,73.57417,74.01106,74.46177,74.92793,75.41141,75.91441,76.43941,76.98935,77.56763,78.17826,78.82597,79.51637,80.25618,81.05351,81.91824,82.86252,83.90148,85.05427,86.34547,87.80731,89.48299,91.43218,93.74018,96.5346,100.0178]},{"value":5,"x":[0,0.02,0.04,0.06,0.08,0.1,0.12,0.14,0.16,0.18,0.2,0.22,0.24,0.26,0.28,0.3,0.32,0.34,0.36,0.38,0.4,0.42,0.44,0.46,0.48,0.5,0.52,0.54,0.56,0.58,0.6,0.62,0.64,0.66,0.68,0.7,0.72,0.74,0.76,0.78,0.8,0.82,0.84,0.86,0.88,0.9,0.92,0.94,0.96,0.98,1],"y":[0,0.010542,0.0210226,0.0314428,0.0418038,0.0521071,0.0623544,0.072548,0.0826903,0.0927842,0.102833,0.1128406,0.1228112,0.1327499,0.1426622,0.1525547,0.1624346,0.17231,0.1821904,0.1920864,0.20201,0.2119748,0.2219965,0.2320926,0.2422836,0.2525926,0.263046,0.2736747,0.2845139,0.2956048,0.3069951,0.3187408,0.3309076,0.3435736,0.3568313,0.3707921,0.3855903,0.4013899,0.418393,0.436851,0.4570812,0.4794899,0.5046049,0.533126,0.5660014,0.6045492,0.6506594,0.7071457,0.7783968,0.8716773,1],"v":[111.9666,112.29,112.6165,112.9462,113.2792,113.6154,113.955,114.2981,114.6448,114.9952,115.3494,115.7075,116.0698,116.4363,116.8074,117.1833,117.5642,117.9504,118.3424,118.7406,119.1453,119.5573,119.9771,120.4055,120.8434,121.2916,121.7515,122.2242,122.7113,123.2147,123.7365,124.279,124.8452,125.4384,126.0628,126.7231,127.4249,128.1753,128.9825,129.8567,130.8104,131.8592,133.0226,134.3256,135.8008,137.4912,139.4552,141.7744,144.5677,148.0159,152.4133]},{"value":10,"x":[0,0.02,0.04,0.06,0.08,0.1,0.12,0.14,0.16,0.18,0.2,0.22,0.24,0.26,0.28,0.3,0.32,0.34,0.36,0.38,0.4,0.42,0.44,0.46,0.48,0.5,0.52,0.54,0.56,0.58,0.6,0.62,0.64,0.66,0.68,0.7,0.72,0.74,0.76,0.78,0.8,0.82,0.84,0.86,0.88,0.9,0.92,0.94,0.96,0.98,1],"y":[0,0.0117162,0.0233376,0.0348646,0.0462982,0.0576396,0.06889,0.0800514,0.0911259,0.1021159,0.1130244,0.1238548,0.1346111,0.1452978,0.1559202,0.1664841,0.1769963,0.1874645,0.1978975,0.2083052,0.218699,0.2290917,0.2394982,0.2499352,0.2604219,0.2709805,0.2816362,0.2924183,0.3033607,0.3145027,0.3258901,0.3375766,0.3496256,0.362112,0.3751253,0.3887729,0.4031848,0.4185197,0.4349736,0.4527908,0.4722799,0.4938369,0.5179771,0.5453865,0.5769954,0.6141027,0.6585787,0.7132232,0.7824352,0.8735707,1],"v":[137.3276,137.6524,137.9811,138.3139,138.6508,138.9918,139.337,139.6866,140.0405,140.3989,140.7618,141.1295,141.5021,141.8796,142.2624,142.6506,143.0444,143.4443,143.8504,144.2633,144.6833,145.111,145.547,145.9921,146.4471,146.9129,147.3908,147.8821,148.3883,148.9113,149.4533,150.017,150.6053,151.2219,151.8711,152.5583,153.2895,154.0724,154.9163,155.8325,156.835,157.9414,159.174,160.5614,162.141,163.9626,166.0946,168.6331,171.7193,175.5711,180.5494]}]};
+
+  // ---- State. Defaults rounded from COL2 of the Aspen MeOH purification demo ----
+  const S = {
+    src: 'data', si: 0, alpha: 3.5,
+    zF: 0.671, xD: 0.9947, xB: 0.0172, q: 1, R: 0.97, F: 198, E: 1,
+    cond: 'total', feedMode: 'opt', Nf: 11,
+    step: 1, nShown: 0, showAll: false, zoom: 'full', hide: false
+  };
+  let DATA = null;  // { name, light, heavy, kind, fixedName, fixedUnit, Tunit, series:[{value, x, y, v, eq, Tb, Td, az}] }
+  let C = null;     // current computed design
+
+  // ================= numerics =================
+  function pchip(xs, ys) {
+    const n = xs.length;
+    if (n < 2) return () => ys[0] || 0;
+    const h = [], d = [];
+    for (let i = 0; i < n - 1; i++) { h[i] = xs[i + 1] - xs[i]; d[i] = (ys[i + 1] - ys[i]) / h[i]; }
+    const m = new Array(n);
+    if (n === 2) { m[0] = m[1] = d[0]; }
+    else {
+      for (let i = 1; i < n - 1; i++) {
+        if (d[i - 1] * d[i] <= 0) m[i] = 0;
+        else { const w1 = 2 * h[i] + h[i - 1], w2 = h[i] + 2 * h[i - 1]; m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]); }
+      }
+      const endS = (h0, h1, d0, d1) => {
+        let s = ((2 * h0 + h1) * d0 - h0 * d1) / (h0 + h1);
+        if (Math.sign(s) !== Math.sign(d0)) s = 0;
+        else if (Math.sign(d0) !== Math.sign(d1) && Math.abs(s) > Math.abs(3 * d0)) s = 3 * d0;
+        return s;
+      };
+      m[0] = endS(h[0], h[1], d[0], d[1]);
+      m[n - 1] = endS(h[n - 2], h[n - 3], d[n - 2], d[n - 3]);
+    }
+    return function (x) {
+      if (x <= xs[0]) return ys[0] + (x - xs[0]) * d[0];
+      if (x >= xs[n - 1]) return ys[n - 1] + (x - xs[n - 1]) * d[n - 2];
+      let lo = 0, hi = n - 1;
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (xs[mid] <= x) lo = mid; else hi = mid; }
+      const t = (x - xs[lo]) / h[lo], t2 = t * t, t3 = t2 * t;
+      return (2 * t3 - 3 * t2 + 1) * ys[lo] + (t3 - 2 * t2 + t) * h[lo] * m[lo] + (-2 * t3 + 3 * t2) * ys[lo + 1] + (t3 - t2) * h[lo] * m[lo + 1];
+    };
+  }
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+  function sortedPairs(a, b) {
+    const p = a.map((v, i) => [v, b[i]]).filter((r) => isFinite(r[0]) && isFinite(r[1])).sort((r, s) => r[0] - s[0]);
+    const out = [];
+    for (const r of p) { if (!out.length || r[0] - out[out.length - 1][0] > 1e-12) out.push(r); }
+    return [out.map((r) => r[0]), out.map((r) => r[1])];
+  }
+
+  // y* (x) for the current source
+  function eqFn() {
+    if (S.src === 'alpha' || !DATA) { const a = S.alpha; return (x) => (a * x) / (1 + (a - 1) * x); }
+    const f = DATA.series[S.si].eq;
+    return (x) => clamp(f(clamp(x, 0, 1)), 0, 1);
+  }
+  const alphaAt = (eq, x) => { const y = eq(x); return (y * (1 - x)) / (x * (1 - y)); };
+
+  // largest x <= x0 where curve(x) = y (moving left from the operating line to the curve)
+  function solveLeft(curve, y, x0) {
+    const g = (x) => curve(x) - y;
+    if (g(x0) <= 1e-11) return null;
+    let a = x0;
+    const hstep = 0.0005;
+    while (a > 0) {
+      const b = Math.max(0, a - hstep);
+      if (g(b) <= 0) {
+        let lo = b, hi = a;
+        for (let k = 0; k < 60; k++) { const mid = 0.5 * (lo + hi); if (g(mid) > 0) hi = mid; else lo = mid; }
+        return 0.5 * (lo + hi);
+      }
+      a = b;
+    }
+    return 0;
+  }
+
+  // operating-line geometry for a reflux ratio R
+  function lines(R, P) {
+    const { zF, xD, xB, q } = P;
+    const xi = ((R + 1) * zF + (q - 1) * xD) / (R + q);
+    const yi = (R * xi + xD) / (R + 1);
+    const sR = R / (R + 1), bR = xD / (R + 1);
+    const sS = (yi - xB) / (xi - xB);
+    return { R, xi, yi, sR, bR, sS, rect: (x) => sR * x + bR, strip: (x) => xB + sS * (x - xB), ok: isFinite(xi) && xi > xB && xi < xD && R + q !== 0 };
+  }
+
+  function feasible(R, P, eq) {
+    const L = lines(R, P);
+    if (!L.ok) return false;
+    const n = 500, tol = 1e-9;
+    for (let i = 0; i <= n; i++) {
+      const x = L.xi + (P.xD - L.xi) * (i / n);
+      if (x < P.xD - 1e-9 && L.rect(x) > eq(x) + tol) return false;
+      const xs = P.xB + (L.xi - P.xB) * (i / n);
+      if (xs > P.xB + 1e-9 && L.strip(xs) > eq(xs) + tol) return false;
+    }
+    return true;
+  }
+
+  function findRmin(P, eq) {
+    let hi = 1000;
+    if (!feasible(hi, P, eq)) return NaN;
+    let lo = 0;
+    for (let k = 0; k < 60; k++) { const mid = 0.5 * (lo + hi); if (feasible(mid, P, eq)) hi = mid; else lo = mid; }
+    return hi;
+  }
+
+  // step off stages from the top. mode 'design' or 'total' (total reflux, y = x)
+  function stepOff(P, L, eq, mode) {
+    const stages = [];
+    let xPrev = P.xD, y = P.xD, feed = null, status = 'ok';
+    const E = mode === 'total' ? 1 : P.E;
+    for (let n = 1; n <= MAXN; n++) {
+      const secOf = (x) => (mode === 'total' ? 'T' : P.feedMode === 'spec' ? (n >= P.Nf ? 'S' : 'R') : (x < L.xi ? 'S' : 'R'));
+      const op = (x) => { const s = secOf(x); return s === 'T' ? x : s === 'S' ? L.strip(x) : L.rect(x); };
+      const curve = E >= 1 ? eq : (x) => { const yo = op(x); return yo + E * (eq(x) - yo); };
+      const xn = solveLeft(curve, y, xPrev);
+      if (xn === null) { status = 'pinch'; break; }
+      const sec = secOf(xn);
+      if (feed === null && sec === 'S') feed = n;
+      const yNext = op(xn);
+      if (op(xn) > eq(xn) + 1e-12 || yNext >= y - 1e-12) {
+        // operating line lies above the equilibrium curve here: this stage cannot work
+        let xs = xn;
+        if (E < 1) { const x2 = solveLeft(eq, y, xPrev); if (x2 !== null) xs = x2; }
+        stages.push({ n, x: xs, y, yNext: op(xs), sec });
+        status = 'pinch'; break;
+      }
+      stages.push({ n, x: xn, y, yNext, sec });
+      if (xn <= P.xB) break;
+      if (xPrev - xn < 1e-9) { status = 'pinch'; break; }
+      xPrev = xn; y = yNext;
+      if (n === MAXN) status = 'max';
+    }
+    const last = stages[stages.length - 1];
+    const done = status === 'ok' && last && last.x <= P.xB;
+    let frac = NaN;
+    if (done) {
+      const xp = stages.length > 1 ? stages[stages.length - 2].x : P.xD;
+      frac = stages.length - 1 + (xp - P.xB) / (xp - last.x);
+    }
+    return { stages, feed, status: done ? 'ok' : status === 'ok' ? 'pinch' : status, N: done ? stages.length : NaN, frac };
+  }
+
+  function gilliland(R, Rmin, Nmin) {
+    if (!(R > Rmin) || !isFinite(Nmin)) return NaN;
+    const X = (R - Rmin) / (R + 1);
+    const Y = 1 - Math.exp(((1 + 54.4 * X) / (11 + 117.2 * X)) * ((X - 1) / Math.sqrt(X)));
+    return (Nmin + Y) / (1 - Y);
+  }
+
+  function compute() {
+    const eq = eqFn();
+    const P = { zF: S.zF, xD: S.xD, xB: S.xB, q: S.q, E: S.E, feedMode: S.feedMode, Nf: S.Nf };
+    const L = lines(S.R, P);
+    const D = (S.F * (S.zF - S.xB)) / (S.xD - S.xB), B = S.F - D;
+    const Lr = S.R * D, V = (S.R + 1) * D, Ls = Lr + S.q * S.F, Vs = V - (1 - S.q) * S.F;
+    const Rmin = findRmin(P, eq);
+    const Lmin = isFinite(Rmin) ? lines(Rmin, P) : null;
+    const feas = L.ok && Vs > 0 && feasible(S.R, P, eq);
+    const st = L.ok && Vs > 0 ? stepOff(P, L, eq, 'design') : { stages: [], feed: null, status: 'geom', N: NaN, frac: NaN };
+    const tot = stepOff(P, L, eq, 'total');
+    const aD = alphaAt(eq, S.xD), aB = alphaAt(eq, S.xB), aF = alphaAt(eq, S.zF);
+    const aAvg = Math.sqrt(aD * aB);
+    const NminF = Math.log((S.xD / (1 - S.xD)) * ((1 - S.xB) / S.xB)) / Math.log(aAvg);
+    const NG = gilliland(S.R, Rmin, tot.frac);
+    // q-line end on the equilibrium curve (for step 3 drawing and Rmin pinch)
+    let xqe = NaN;
+    if (Math.abs(S.q - 1) < 1e-9) xqe = S.zF;
+    else {
+      const m = S.q / (S.q - 1), dd = S.q > 1 ? 1 : -1;
+      const g = (x) => eq(x) - (S.zF + m * (x - S.zF));
+      let prev = S.zF;
+      for (let k = 1; k <= 2000; k++) {
+        const x = S.zF + dd * k * 0.0005;
+        if (x < 0 || x > 1) break;
+        if (g(x) <= 0) { let lo = prev, hi = x; for (let j = 0; j < 50; j++) { const mid = 0.5 * (lo + hi); if (g(mid) > 0) lo = mid; else hi = mid; } xqe = 0.5 * (lo + hi); break; }
+        prev = x;
+      }
+    }
+    // azeotrope / curve below diagonal inside (xB, xD)
+    let below = null;
+    for (let i = 1; i < 400; i++) { const x = S.xB + (S.xD - S.xB) * (i / 400); if (eq(x) < x) { below = x; break; } }
+    const recL = (D * S.xD) / (S.F * S.zF), recH = (B * (1 - S.xB)) / (S.F * (1 - S.zF));
+    C = { eq, P, L, D, B, Lr, V, Ls, Vs, Rmin, Lmin, feas, st, tot, aD, aB, aF, aAvg, NminF, NG, xqe, below, recL, recH };
+    return C;
+  }
+
+  // ================= data =================
+  function loadData(raw, isSample) {
+    const notes = (raw.notes || []).slice();
+    let comps = raw.comps.slice(), series = raw.series.map((s) => ({ value: s.value, x: s.x.slice(), y: s.y.slice(), v: s.v ? s.v.slice() : null }));
+    // light component = the one whose vapor is richer
+    const s0 = series[0];
+    let sum = 0; s0.x.forEach((x, i) => { sum += s0.y[i] - x; });
+    if (sum < 0) {
+      comps = [comps[1], comps[0]];
+      series.forEach((s) => { s.x = s.x.map((a) => 1 - a); s.y = s.y.map((a) => 1 - a); });
+    }
+    series.sort((a, b) => a.value - b.value);
+    for (const s of series) {
+      const [xs, ys] = sortedPairs(s.x, s.y);
+      if (xs.length < 3) throw new Error('A data series has fewer than 3 usable points.');
+      s.eq = pchip(xs, ys);
+      if (s.v) {
+        const [xa, ta] = sortedPairs(s.x, s.v); s.Tb = pchip(xa, ta);
+        const [ya, tb] = sortedPairs(s.y, s.v); s.Td = pchip(ya, tb);
+      }
+      s.az = [];
+      for (let i = 1; i < xs.length - 1; i++) {
+        const d0 = ys[i - 1] - xs[i - 1], d1 = ys[i] - xs[i];
+        if (i > 1 && d0 * d1 < 0) s.az.push(xs[i - 1] + (xs[i] - xs[i - 1]) * (d0 / (d0 - d1)));
+      }
+      s.xmin = xs[0]; s.xmax = xs[xs.length - 1];
+      if (s.xmin > 0.02 || s.xmax < 0.98) notes.push('The data at ' + fixedLabel(raw, s.value) + ' cover only x = ' + s.xmin.toFixed(3) + '–' + s.xmax.toFixed(3) + '; the curve is extrapolated outside that range.');
+    }
+    if (raw.kind === 'Pxy') notes.push('These are P-x-y (constant temperature) data. A column runs at about constant pressure, so T-x-y data at the column pressure are the right choice.');
+    DATA = {
+      name: raw.name || 'data', light: comps[0], heavy: comps[1], kind: raw.kind,
+      fixedName: raw.kind === 'Pxy' ? 'Temperature' : 'Pressure', fixedUnit: raw.fixedUnit || '', Tunit: raw.kind === 'Txy' ? (raw.varUnit || '') : '',
+      series
+    };
+    S.si = 0;
+    if (raw.kind === 'Txy') { const i1 = series.findIndex((s) => Math.abs(toBar(s.value, raw.fixedUnit) - 1.013) < 0.05); if (i1 >= 0) S.si = i1; }
+    S.src = 'data';
+    $('src-data').checked = true;
+    if (!isSample) {
+      // keep the specs sensible for a new system
+      const sx = series[S.si];
+      if (sx.az.length) notes.push('The equilibrium curve crosses the diagonal (azeotrope) near x = ' + sx.az.map((a) => a.toFixed(3)).join(', ') + '. A single column cannot pass it: keep x_D below the azeotrope.');
+    }
+    $('warn').textContent = notes.join(' ');
+    $('dataName').textContent = DATA.name;
+    $('dataSummary').textContent = '· ' + cap(DATA.light) + ' / ' + cap(DATA.heavy) + ' · ' + series.length + ' ' + (raw.kind === 'Pxy' ? 'isotherm' : raw.kind === 'Txy' ? 'isobar' : 'set') + (series.length > 1 ? 's' : '');
+    $('restoreBtn').hidden = !!isSample;
+    buildSeriesSeg();
+    syncAll();
+  }
+
+  function toBar(v, u) {
+    const U = String(u || '').toLowerCase();
+    if (U === 'atm') return v * 1.01325; if (U === 'kpa') return v / 100; if (U === 'pa') return v / 1e5; if (U === 'psia' || U === 'psi') return v * 0.0689476;
+    if (U === 'mbar') return v / 1000; if (U === 'mmhg' || U === 'torr') return v * 0.00133322; if (U === 'mpa') return v * 10;
+    return v;
+  }
+  function unitLabel(u) { const U = String(u || ''); if (/^c$/i.test(U)) return '°C'; if (/^f$/i.test(U)) return '°F'; if (/^k$/i.test(U)) return 'K'; return U; }
+  function fixedLabel(raw, v) { return fmtG(v) + ' ' + unitLabel(raw.fixedUnit); }
+  function cap(s) { s = String(s); if (s.length <= 4 && /^[A-Z0-9]+$/.test(s)) return s; return s.charAt(0) + s.slice(1).toLowerCase(); }
+  function fmtG(v) { return Math.abs(v) >= 100 ? String(Math.round(v * 10) / 10) : String(Math.round(v * 1000) / 1000); }
+
+  function buildSeriesSeg() {
+    const seg = $('seriesSeg'); seg.innerHTML = '';
+    $('lbl-series').textContent = DATA ? DATA.fixedName : 'Pressure';
+    if (!DATA) return;
+    DATA.series.forEach((s, i) => {
+      const inp = document.createElement('input');
+      inp.type = 'radio'; inp.name = 'series'; inp.id = 'se' + i; inp.value = String(i); inp.checked = i === S.si;
+      const lab = document.createElement('label'); lab.htmlFor = inp.id; lab.textContent = fmtG(s.value) + ' ' + unitLabel(DATA.fixedUnit);
+      inp.addEventListener('change', () => { S.si = i; update(true); });
+      seg.append(inp, lab);
+    });
+  }
+
+  // generic table parser: Aspen binary-analysis header, or plain numeric columns
+  function parseRows(rows, name) {
+    const norm = (c) => (typeof c === 'string' ? c.trim().toUpperCase().replace(/\s+/g, ' ') : '');
+    const num = (c) => (typeof c === 'number' ? c : typeof c === 'string' && c.trim() !== '' && isFinite(+c.trim().replace(',', '.')) ? +c.trim().replace(',', '.') : NaN);
+    const hi = rows.findIndex((r) => Array.isArray(r) && r.some((c) => /^VAPOR MOLEFRAC \S/.test(norm(c))));
+    if (hi >= 0) {
+      const H = rows[hi].map(norm);
+      const col = (n) => H.indexOf(n);
+      const ids = [];
+      H.forEach((h) => { const m = h.match(/^VAPOR MOLEFRAC (.+)$/); if (m) ids.push(m[1]); });
+      if (ids.length !== 2) throw new Error('The table has ' + ids.length + ' components. McCabe-Thiele needs a binary (2-component) analysis.');
+      const kind = col('TOTAL TEMP') >= 0 ? 'Txy' : col('TOTAL PRES') >= 0 ? 'Pxy' : null;
+      if (!kind) throw new Error('No TOTAL TEMP or TOTAL PRES column was found. Use the Txy results table of a Binary analysis.');
+      const iv = col(kind === 'Txy' ? 'TOTAL TEMP' : 'TOTAL PRES');
+      let iF = col(kind === 'Txy' ? 'PRES' : 'TEMP'); if (iF < 0) iF = -1;
+      let basis = null;
+      H.forEach((h) => { const m = h.match(/^MOLEFRAC (.+)$/); if (m && !basis && ids.includes(m[1])) basis = m[1]; });
+      if (!basis) basis = ids[0];
+      let ix = col('LIQUID1 MOLEFRAC ' + basis); if (ix < 0) ix = col('LIQUID MOLEFRAC ' + basis); if (ix < 0) ix = col('MOLEFRAC ' + basis);
+      const iy = col('VAPOR MOLEFRAC ' + basis);
+      if (ix < 0) throw new Error('No liquid mole-fraction column for ' + basis + ' was found.');
+      const unitsRow = rows[hi + 1] || [];
+      const hasUnits = (iF >= 0 && typeof unitsRow[iF] === 'string' && isNaN(num(unitsRow[iF]))) || (typeof unitsRow[iv] === 'string' && isNaN(num(unitsRow[iv])));
+      const groups = new Map(); const notes = []; let l2 = 0;
+      const iL2 = col('LIQUID2 MOLEFRAC ' + basis);
+      for (let r = hi + 1; r < rows.length; r++) {
+        const row = rows[r]; if (!row) continue;
+        const f = iF >= 0 ? num(row[iF]) : 0, x = num(row[ix]), y = num(row[iy]), v = num(row[iv]);
+        if ([f, x, y, v].some((a) => !isFinite(a))) continue;
+        if (iL2 >= 0 && isFinite(num(row[iL2]))) l2++;
+        if (!groups.has(f)) groups.set(f, { value: f, x: [], y: [], v: [] });
+        const g = groups.get(f); g.x.push(x); g.y.push(y); g.v.push(v);
+      }
+      const series = [...groups.values()].filter((g) => g.x.length >= 3);
+      if (!series.length) throw new Error('The table has a header row but no numeric data rows.');
+      if (l2) notes.push(l2 + ' rows have a second liquid phase (LIQUID2); only the vapor–liquid equilibrium from LIQUID1 is used.');
+      if (!hasUnits) notes.push('No units row under the header, so °C and bar are assumed.');
+      const other = ids.find((i) => i !== basis);
+      return { name, comps: [basis, other], kind, notes, series, fixedUnit: hasUnits && iF >= 0 ? unitsRow[iF] : kind === 'Txy' ? 'bar' : 'C', varUnit: hasUnits ? unitsRow[iv] : kind === 'Txy' ? 'C' : 'bar' };
+    }
+    // plain numeric columns: x, y [, T]
+    const x = [], y = [], v = []; let names = null, withT = true;
+    for (const r of rows) {
+      if (!Array.isArray(r)) continue;
+      const nums = r.map(num).filter((a) => isFinite(a));
+      if (nums.length >= 2 && r.filter((c) => c !== null && String(c).trim() !== '').every((c) => isFinite(num(c)))) {
+        x.push(nums[0]); y.push(nums[1]); if (nums.length >= 3) v.push(nums[2]); else withT = false;
+      } else if (!x.length && r.some((c) => typeof c === 'string' && c.trim())) {
+        names = r.filter((c) => typeof c === 'string' && c.trim()).map((c) => c.trim());
+      }
+    }
+    if (x.length < 3) throw new Error('No equilibrium data were found. Paste the Aspen Txy table with its header row, or a table with columns x and y.');
+    if (x.some((a) => a < 0 || a > 1) || y.some((a) => a < 0 || a > 1)) throw new Error('x and y must be mole fractions between 0 and 1 (first two numeric columns).');
+    const nm = (s) => (s || '').replace(/^(x|y|liquid|vapor|vapour)[\s_:(-]*/i, '').replace(/[)\s]+$/, '');
+    let c0 = names && names[0] ? nm(names[0]) : '';
+    if (!c0) c0 = 'Component 1';
+    const rawOut = { name, comps: [c0, c0 === 'Component 1' ? 'Component 2' : 'other component'], kind: withT && v.length === x.length ? 'Txy' : 'xy', notes: [], series: [{ value: 0, x, y, v: withT && v.length === x.length ? v : null }], fixedUnit: '', varUnit: '' };
+    if (rawOut.kind === 'Txy') rawOut.notes.push('Third column read as temperature; its unit is not known.');
+    return rawOut;
+  }
+
+  function parseText(text, name) {
+    const lines = text.replace(/\r/g, '').split('\n').filter((l) => l.trim() !== '');
+    const sep = lines.some((l) => l.includes('\t')) ? '\t' : lines.some((l) => l.includes(';')) ? ';' : ',';
+    const rows = lines.map((l) => l.split(sep).map((c) => { const t = c.trim(); return t === '' ? null : t; }));
+    return parseRows(rows, name);
+  }
+
+  function ensureXLSX() {
+    if (window.XLSX) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script'); s.src = XLSX_SRC;
+      s.onload = () => (window.XLSX ? resolve() : reject(new Error('The spreadsheet reader did not start.')));
+      s.onerror = () => reject(new Error('Could not load the spreadsheet reader. Check the internet connection, or use Paste table instead.'));
+      document.head.appendChild(s);
+    });
+  }
+
+  function parseWorkbook(wb, name) {
+    let firstErr = null, pxy = null;
+    for (const sh of wb.SheetNames) {
+      const rows = window.XLSX.utils.sheet_to_json(wb.Sheets[sh], { header: 1, raw: true, defval: null });
+      try {
+        const r = parseRows(rows, name);
+        if (r.kind === 'Pxy') { if (!pxy) pxy = r; continue; }
+        return r;
+      } catch (e) { if (!firstErr) firstErr = e; }
+    }
+    if (pxy) return pxy;
+    throw firstErr || new Error('No equilibrium table was found in the workbook.');
+  }
+
+  // ================= plot geometry =================
+  const M = { l: 58, r: 18, t: 14, b: 48 };
+  let G = { side: 400, ox: 0, oy: 0, x0: 0, x1: 1, y0: 0, y1: 1, W: 600, H: 460 };
+  const plotEl = $('plot');
+
+  function viewRange() {
+    if (S.zoom === 'top') { const span = clamp(Math.max(0.06, 6 * (1 - S.xD)), 0.06, 1); return [1 - span, 1]; }
+    if (S.zoom === 'bot') { const span = clamp(Math.max(0.06, 6 * S.xB), 0.06, 1); return [0, span]; }
+    return [0, 1];
+  }
+  function layout() {
+    const W = Math.max(280, $('plotBox').clientWidth);
+    const side = Math.max(200, Math.min(W - M.l - M.r, 620));
+    const r = viewRange();
+    G = { side, ox: Math.max(M.l, (W - side) / 2 + (M.l - M.r) / 2), oy: M.t, x0: r[0], x1: r[1], y0: r[0], y1: r[1], W, H: side + M.t + M.b };
+    plotEl.setAttribute('width', W); plotEl.setAttribute('height', G.H); plotEl.setAttribute('viewBox', '0 0 ' + W + ' ' + G.H);
+    const cr = $('clipRect'); cr.setAttribute('x', G.ox); cr.setAttribute('y', G.oy); cr.setAttribute('width', side); cr.setAttribute('height', side);
+  }
+  const X = (x) => G.ox + ((x - G.x0) / (G.x1 - G.x0)) * G.side;
+  const Y = (y) => G.oy + G.side - ((y - G.y0) / (G.y1 - G.y0)) * G.side;
+  const iX = (px) => G.x0 + ((px - G.ox) / G.side) * (G.x1 - G.x0);
+  const iY = (py) => G.y0 + ((G.oy + G.side - py) / G.side) * (G.y1 - G.y0);
+  const P2 = (x, y) => X(x).toFixed(2) + ',' + Y(y).toFixed(2);
+  const line = (x1, y1, x2, y2, cls) => '<line class="' + cls + '" x1="' + X(x1).toFixed(2) + '" y1="' + Y(y1).toFixed(2) + '" x2="' + X(x2).toFixed(2) + '" y2="' + Y(y2).toFixed(2) + '"/>';
+  function niceStep(span) { const raw = span / 6, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p; }
+
+  function drawStatic() {
+    const eq = C.eq, s = [];
+    const step = niceStep(G.x1 - G.x0), dec = Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
+    for (let v = Math.ceil(G.x0 / step - 1e-9) * step; v <= G.x1 + 1e-9; v += step) {
+      const px = X(v), py = Y(v);
+      s.push('<line class="grid" x1="' + px + '" y1="' + G.oy + '" x2="' + px + '" y2="' + (G.oy + G.side) + '"/>');
+      s.push('<line class="grid" x1="' + G.ox + '" y1="' + py + '" x2="' + (G.ox + G.side) + '" y2="' + py + '"/>');
+      s.push('<line class="tick" x1="' + px + '" y1="' + (G.oy + G.side) + '" x2="' + px + '" y2="' + (G.oy + G.side + 5) + '"/>');
+      s.push('<line class="tick" x1="' + (G.ox - 5) + '" y1="' + py + '" x2="' + G.ox + '" y2="' + py + '"/>');
+      s.push('<text class="tl" x="' + px + '" y="' + (G.oy + G.side + 18) + '" text-anchor="middle">' + v.toFixed(dec) + '</text>');
+      s.push('<text class="tl" x="' + (G.ox - 8) + '" y="' + (py + 4) + '" text-anchor="end">' + v.toFixed(dec) + '</text>');
+    }
+    s.push('<rect class="frame" x="' + G.ox + '" y="' + G.oy + '" width="' + G.side + '" height="' + G.side + '"/>');
+    const lt = DATA && S.src === 'data' ? cap(DATA.light) : 'light key';
+    s.push('<text class="axt" x="' + (G.ox + G.side / 2) + '" y="' + (G.H - 8) + '" text-anchor="middle">x, liquid mole fraction of ' + esc(lt) + '</text>');
+    s.push('<text class="axt" transform="translate(16,' + (G.oy + G.side / 2) + ') rotate(-90)" text-anchor="middle">y, vapor mole fraction of ' + esc(lt) + '</text>');
+    // diagonal + equilibrium curve (clipped)
+    s.push('<g clip-path="url(#clip)">');
+    s.push(line(0, 0, 1, 1, 'diag'));
+    const pts = [], n = 400;
+    for (let i = 0; i <= n; i++) { const x = G.x0 + (G.x1 - G.x0) * (i / n); pts.push(P2(x, eq(x))); }
+    s.push('<polyline class="eqc" points="' + pts.join(' ') + '"/>');
+    if (S.E < 1 && S.step >= 6 && C.L.ok) {
+      const pp = [];
+      for (let i = 0; i <= n; i++) {
+        const x = G.x0 + (G.x1 - G.x0) * (i / n);
+        if (x < S.xB || x > S.xD) continue;
+        const yo = x < C.L.xi ? C.L.strip(x) : C.L.rect(x);
+        pp.push(P2(x, yo + S.E * (eq(x) - yo)));
+      }
+      if (pp.length > 1) s.push('<polyline class="eqp" points="' + pp.join(' ') + '"/>');
+    }
+    s.push('</g>');
+    $('gStatic').innerHTML = s.join('');
+  }
+  function esc(t) { return String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+  function stagesToDraw() {
+    const n = C.st.stages.length;
+    if (S.step < 6) return 0;
+    return S.showAll ? n : Math.min(S.nShown, n);
+  }
+
+  function drawDynamic() {
+    const s = [], lab = [], L = C.L, eq = C.eq;
+    const st = S.step;
+    // Step 2: drop lines from points to the x-axis
+    if (st >= 2) {
+      for (const [v, c] of [[S.xB, 'b'], [S.zF, 'f'], [S.xD, 'd']]) s.push(line(v, v, v, G.y0, 'drop'));
+    }
+    // Step 3: q-line
+    if (st >= 3) {
+      if (st >= 4 && L.ok) {
+        s.push(line(S.zF, S.zF, L.xi, L.yi, 'ql'));
+        if (isFinite(C.xqe)) s.push(line(L.xi, L.yi, C.xqe, eq(C.xqe), 'ql-ext'));
+      } else {
+        let xe, ye;
+        if (isFinite(C.xqe)) { xe = C.xqe; ye = eq(C.xqe); } else { const hp = qHandlePos(); xe = S.zF + 3 * (hp[0] - S.zF); ye = S.zF + 3 * (hp[1] - S.zF); }
+        s.push(line(S.zF, S.zF, xe, ye, 'ql'));
+      }
+    }
+    // Step 4: rectifying line (+ dashed extension to the y-axis), Rmin line
+    if (st >= 4) {
+      if (C.Lmin && C.Lmin.ok && S.R > 0) s.push(line(S.xD, S.xD, C.Lmin.xi, C.Lmin.yi, 'rmin'));
+      if (L.ok) {
+        s.push(line(L.xi, L.yi, S.xD, S.xD, 'rl'));
+        s.push(line(0, L.bR, L.xi, L.yi, 'rl-ext'));
+      } else {
+        s.push(line(0, L.bR, S.xD, S.xD, 'rl'));
+      }
+    }
+    // Step 5: stripping line
+    if (st >= 5 && L.ok) s.push(line(S.xB, S.xB, L.xi, L.yi, 'sl'));
+    // Step 6: stages
+    const nd = stagesToDraw();
+    if (nd > 0) {
+      const S6 = C.st.stages;
+      let xp = S.xD, lastLabX = Infinity, lastLabY = Infinity;
+      for (let i = 0; i < nd; i++) {
+        const g = S6[i];
+        const isFeed = C.st.feed === g.n;
+        const yEnd = i === S6.length - 1 && g.x <= S.xB ? g.x : g.yNext;
+        s.push('<polyline class="stp' + (isFeed ? ' stp-feed' : '') + '" points="' + P2(xp, g.y) + ' ' + P2(g.x, g.y) + ' ' + P2(g.x, yEnd) + '"/>');
+        const px = X(g.x), py = Y(g.y);
+        if (Math.hypot(px - lastLabX, py - lastLabY) > 15 && px > G.ox - 2 && px < G.ox + G.side && py > G.oy && py < G.oy + G.side) {
+          lab.push('<text class="stp-lab" x="' + (px - 4).toFixed(1) + '" y="' + (py - 5).toFixed(1) + '" text-anchor="end">' + g.n + '</text>');
+          lastLabX = px; lastLabY = py;
+        }
+        xp = g.x;
+      }
+    }
+    // intersection marker
+    if (st >= 4 && L.ok) s.push('<circle class="ix" cx="' + X(L.xi).toFixed(2) + '" cy="' + Y(L.yi).toFixed(2) + '" r="4"/>');
+    // point labels on the x-axis
+    if (st >= 2) {
+      const lb = (v, cls, t, dy) => { const px = X(v); if (px >= G.ox - 1 && px <= G.ox + G.side + 1) lab.push('<text class="ptlab ' + cls + '" x="' + (px + 4).toFixed(1) + '" y="' + (G.oy + G.side - 6 - dy) + '">' + t + '</text>'); };
+      lb(S.xB, 'b', 'x_B', 0); lb(S.zF, 'f', 'z_F', 0); lb(S.xD, 'd', 'x_D', 0);
+    }
+    if (st >= 4 && L.ok) {
+      const py = Y(L.bR);
+      if (G.x0 <= 0 && py > G.oy && py < G.oy + G.side) lab.push('<text class="ptlab d" x="' + (G.ox + 10) + '" y="' + (py - 8).toFixed(1) + '">x_D/(R+1) = ' + L.bR.toFixed(3) + '</text>');
+    }
+    $('gDyn').innerHTML = s.join('');
+    $('gLab').innerHTML = lab.join('').replace(/x_B/g, 'x<tspan dy="3" font-size="9">B</tspan><tspan dy="-3"></tspan>').replace(/z_F/g, 'z<tspan dy="3" font-size="9">F</tspan><tspan dy="-3"></tspan>').replace(/x_D/g, 'x<tspan dy="3" font-size="9">D</tspan><tspan dy="-3"></tspan>');
+    placeHandles();
+  }
+
+  // ---- draggable handles (persistent elements so focus survives redraws) ----
+  const HANDLES = {
+    xB: { cls: 'b', step: 2, label: 'Bottoms composition x_B on the diagonal' },
+    zF: { cls: 'f', step: 2, label: 'Feed composition z_F on the diagonal' },
+    xD: { cls: 'd', step: 2, label: 'Distillate composition x_D on the diagonal' },
+    q: { cls: 'q', step: 3, label: 'Feed line handle: sets q' },
+    R: { cls: 'r', step: 4, label: 'Rectifying line intercept: sets the reflux ratio' }
+  };
+  for (const k of Object.keys(HANDLES)) {
+    const c = document.createElementNS(SVGNS, 'circle');
+    c.setAttribute('class', 'h ' + HANDLES[k].cls); c.setAttribute('r', k === 'q' || k === 'R' ? 6.5 : 7);
+    c.setAttribute('tabindex', '0'); c.setAttribute('role', 'slider'); c.setAttribute('aria-label', HANDLES[k].label);
+    c.dataset.h = k; HANDLES[k].el = c; $('gHandles').appendChild(c);
+  }
+  function qHandlePos() {
+    let dx = S.q - 1, dy = S.q; const nrm = Math.hypot(dx, dy) || 1; dx /= nrm; dy /= nrm;
+    let len = 0.16 * (G.x1 - G.x0);
+    // keep the handle inside [0,1]
+    for (let k = 0; k < 20; k++) { const x = S.zF + dx * len, y = S.zF + dy * len; if (x >= 0 && x <= 1 && y >= 0 && y <= 1) break; len *= 0.8; }
+    return [S.zF + dx * len, S.zF + dy * len];
+  }
+  function placeHandles() {
+    const pos = { xB: [S.xB, S.xB], zF: [S.zF, S.zF], xD: [S.xD, S.xD], q: qHandlePos(), R: [0, S.xD / (S.R + 1)] };
+    for (const k of Object.keys(HANDLES)) {
+      const h = HANDLES[k], [x, y] = pos[k];
+      const px = X(x), py = Y(y);
+      const vis = S.step >= h.step && px >= G.ox - 1 && px <= G.ox + G.side + 1 && py >= G.oy - 1 && py <= G.oy + G.side + 1;
+      h.el.style.display = vis ? '' : 'none';
+      h.el.setAttribute('cx', px.toFixed(2)); h.el.setAttribute('cy', py.toFixed(2));
+      h.el.setAttribute('aria-valuetext', k === 'q' ? 'q = ' + S.q.toFixed(3) : k === 'R' ? 'R = ' + S.R.toFixed(3) : k + ' = ' + S[k].toFixed(4));
+    }
+  }
+
+  function applyHandle(k, x, y) {
+    if (k === 'xB' || k === 'zF' || k === 'xD') {
+      const t = (x + y) / 2;
+      if (k === 'xB') S.xB = clamp(t, 0.0001, S.zF - 0.005);
+      if (k === 'zF') S.zF = clamp(t, S.xB + 0.005, S.xD - 0.005);
+      if (k === 'xD') S.xD = clamp(t, S.zF + 0.005, 0.9999);
+    } else if (k === 'q') {
+      const dx = x - S.zF, dy = y - S.zF;
+      const den = dy - dx;
+      let q = Math.abs(den) < 1e-6 ? (dy > 0 ? 2.5 : -1) : dy / den;
+      if (Math.abs(dx) < 0.004 * (G.x1 - G.x0)) q = 1;   // snap to vertical (saturated liquid)
+      if (Math.abs(dy) < 0.004 * (G.x1 - G.x0) && dx < 0) q = 0; // snap to horizontal (saturated vapor)
+      S.q = clamp(q, -1, 2.5);
+    } else if (k === 'R') {
+      const b = clamp(y, S.xD / 101, S.xD / 1.01);
+      S.R = S.xD / b - 1;
+    }
+  }
+
+  let drag = null;
+  plotEl.addEventListener('pointerdown', (e) => {
+    const t = e.target.closest && e.target.closest('[data-h]');
+    if (!t) return;
+    drag = t.dataset.h; plotEl.setPointerCapture(e.pointerId); plotEl.classList.add('dragging'); t.focus({ preventScroll: true });
+    e.preventDefault();
+  });
+  plotEl.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const r = plotEl.getBoundingClientRect();
+    applyHandle(drag, iX(e.clientX - r.left), iY(e.clientY - r.top));
+    request(false);
+  });
+  const endDrag = () => { if (!drag) return; drag = null; plotEl.classList.remove('dragging'); request(true); };
+  plotEl.addEventListener('pointerup', endDrag);
+  plotEl.addEventListener('pointercancel', endDrag);
+  plotEl.addEventListener('keydown', (e) => {
+    const t = e.target.closest && e.target.closest('[data-h]'); if (!t) return;
+    const k = t.dataset.h, big = e.shiftKey ? 10 : 1;
+    let d = 0;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') d = 1; else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') d = -1; else return;
+    e.preventDefault();
+    if (k === 'xB') S.xB = clamp(S.xB + d * big * 0.0005, 0.0001, S.zF - 0.005);
+    if (k === 'zF') S.zF = clamp(S.zF + d * big * 0.001, S.xB + 0.005, S.xD - 0.005);
+    if (k === 'xD') S.xD = clamp(S.xD + d * big * 0.0005, S.zF + 0.005, 0.9999);
+    if (k === 'q') S.q = clamp(Math.round((S.q + d * big * 0.01) * 100) / 100, -1, 2.5);
+    if (k === 'R') S.R = clamp(Math.round((S.R + d * big * 0.01) * 100) / 100, 0.01, 100);
+    request(true);
+  });
+
+  // ================= text, equations, readout =================
+  const f = (v, d = 3) => (isFinite(v) ? Number(v).toFixed(d) : '–');
+  const fx = (v) => f(v, 4);
+  const T = String.raw;
+  function tex(el, src, display = true) {
+    if (window.katex) {
+      try { window.katex.render(src, el, { displayMode: display, throwOnError: false, strict: false }); return; } catch (e) { /* fall through */ }
+    }
+    el.textContent = src; el.classList.add('eqfallback');
+  }
+  function feedCondition(q) {
+    if (q > 1.0005) return 'subcooled liquid';
+    if (q > 0.9995) return 'saturated liquid';
+    if (q > 0.0005) return 'liquid + vapor (' + Math.round(q * 100) + ' % liquid)';
+    if (q > -0.0005) return 'saturated vapor';
+    return 'superheated vapor';
+  }
+  function Tat(x, which) {
+    if (S.src !== 'data' || !DATA || DATA.kind !== 'Txy') return NaN;
+    const s = DATA.series[S.si]; const fn = which === 'dew' ? s.Td : s.Tb; return fn ? fn(x) : NaN;
+  }
+  const Tu = () => (DATA ? unitLabel(DATA.Tunit) : '');
+  const TuTex = () => { const u = Tu(); return u === '°C' ? T`\,{}^\circ\mathrm{C}` : u === '°F' ? T`\,{}^\circ\mathrm{F}` : u ? T`\,\mathrm{${u}}` : ''; };
+  const fT = (v) => (isFinite(v) ? v.toFixed(1) + ' ' + Tu() : '–');
+
+  function aspenNums() {
+    const N = C.st.N, Nf = C.st.feed;
+    const add = S.cond === 'total' ? 1 : 0;
+    return { NST: isFinite(N) ? N + add : NaN, NF: Nf ? Nf + add : NaN };
+  }
+
+  const STEPS = {
+    1: {
+      title: 'Equilibrium curve',
+      text: () => 'The curve is y*, the vapor in equilibrium with liquid x, for the light key ' + nameL() + (seriesTxt() ? ' at ' + seriesTxt() : '') + '. The farther it bows away from the diagonal y = x, the larger the relative volatility and the fewer stages you need.',
+      todo: () => '<b>Check:</b> the curve must stay above the diagonal between x<sub>B</sub> and x<sub>D</sub>. Load your own Aspen T-x-y data below the diagram, or switch to a constant α to see how volatility changes the curve.',
+      eq: () => [T`\alpha_{12}=\frac{y/x}{(1-y)/(1-x)}`, S.src === 'alpha' ? T`y^*=\frac{\alpha x}{1+(\alpha-1)x}=\frac{${f(S.alpha, 2)}\,x}{1+${f(S.alpha - 1, 2)}\,x}` : T`\alpha(x_B)=${f(C.aB, 2)},\quad \alpha(z_F)=${f(C.aF, 2)},\quad \alpha(x_D)=${f(C.aD, 2)}`],
+      kv: () => [['α at x<sub>B</sub>', f(C.aB, 2)], ['α at z<sub>F</sub>', f(C.aF, 2)], ['α at x<sub>D</sub>', f(C.aD, 2)]].concat(isFinite(Tat(0, 'bub')) ? [['Boiling point, pure ' + esc(cap(DATA.heavy)), fT(Tat(0, 'bub'))], ['Boiling point, pure ' + esc(cap(DATA.light)), fT(Tat(1, 'bub'))]] : [])
+    },
+    2: {
+      title: 'Feed and product compositions',
+      text: () => 'x<sub>D</sub>, z<sub>F</sub> and x<sub>B</sub> are mole fractions of ' + nameL() + '. They are marked on the diagonal because each operating line ends where y = x: at the top, the vapor leaving stage 1 has the distillate composition; at the bottom, the reboiler vapor and the bottoms liquid meet the same way.',
+      todo: () => '<b>Do:</b> drag the <span class="c-b">green</span>, <span class="c-f">amber</span> and <span class="c-d">blue</span> dots along the diagonal, or type the values above. The overall mass balance then fixes D and B.',
+      eq: () => [T`D=F\,\frac{z_F-x_B}{x_D-x_B}=${f(S.F, 1)}\cdot\frac{${fx(S.zF)}-${fx(S.xB)}}{${fx(S.xD)}-${fx(S.xB)}}=${f(C.D, 2)}`, T`B=F-D=${f(C.B, 2)}`],
+      kv: () => [['Distillate D', f(C.D, 2) + ' kmol/h', 'd'], ['Bottoms B', f(C.B, 2) + ' kmol/h', 'b'], ['Recovery of ' + esc(nameL()) + ' in D', f(100 * C.recL, 2) + ' %'], ['Recovery of ' + esc(nameH()) + ' in B', f(100 * C.recH, 2) + ' %']]
+    },
+    3: {
+      title: 'Feed line (q-line)',
+      text: () => 'q is the liquid fraction the feed adds to the column: the moles of liquid flowing down below the feed per mole of feed. The q-line starts at (z<sub>F</sub>, z<sub>F</sub>), and its slope q/(q−1) depends only on the thermal condition of the feed. It is the locus where the two operating lines meet.',
+      todo: () => '<b>Do:</b> drag the filled <span class="c-f">amber dot</span> to turn the line. Vertical = saturated liquid (q = 1), horizontal = saturated vapor (q = 0).',
+      eq: () => [T`y=\frac{q}{q-1}\,x-\frac{z_F}{q-1}`, Math.abs(S.q - 1) < 1e-9 ? T`q=1:\quad x=z_F=${fx(S.zF)}\ \text{(vertical line)}` : T`y=${f(S.q / (S.q - 1), 3)}\,x ${S.zF / (S.q - 1) > 0 ? '-' : '+'} ${f(Math.abs(S.zF / (S.q - 1)), 4)}`],
+      kv: () => [['q', f(S.q, 3), 'f'], ['Feed condition', feedCondition(S.q)], ['Slope q/(q−1)', Math.abs(S.q - 1) < 1e-9 ? '∞ (vertical)' : f(S.q / (S.q - 1), 3)]].concat(isFinite(Tat(S.zF, 'bub')) ? [['Bubble point at z<sub>F</sub>', fT(Tat(S.zF, 'bub'))], ['Dew point at z<sub>F</sub>', fT(Tat(S.zF, 'dew'))]] : [])
+    },
+    4: {
+      title: 'Rectifying operating line',
+      text: () => 'A component balance around the top of the column (condenser plus stages 1…n) links the liquid x<sub>n</sub> leaving a stage to the vapor y<sub>n+1</sub> rising from the stage below. With constant molar overflow it is a straight line from (x<sub>D</sub>, x<sub>D</sub>) with slope L/V = R/(R+1).',
+      todo: () => '<b>Do:</b> drag the filled <span class="c-d">blue dot</span> on the y-axis (intercept x<sub>D</sub>/(R+1)) to change R. The grey dashed line is R<sub>min</sub>: at that reflux the operating line touches the equilibrium curve (a pinch) and the column needs infinitely many stages.',
+      eq: () => [T`y_{n+1}=\frac{R}{R+1}\,x_n+\frac{x_D}{R+1}`, T`y_{n+1}=${f(C.L.sR, 4)}\,x_n+${f(C.L.bR, 4)}`],
+      kv: () => [['Reflux ratio R', f(S.R, 3), 'd'], ['Minimum reflux R<sub>min</sub>', f(C.Rmin, 3), 'ans'], ['R / R<sub>min</sub>', f(S.R / C.Rmin, 2), 'ans'], ['L = R·D', f(C.Lr, 2) + ' kmol/h'], ['V = (R+1)·D', f(C.V, 2) + ' kmol/h'], ['Lines meet at (x, y)', '(' + fx(C.L.xi) + ', ' + fx(C.L.yi) + ')']]
+    },
+    5: {
+      title: 'Stripping operating line',
+      text: () => 'A balance around the bottom of the column (stages m…N and the reboiler). It joins (x<sub>B</sub>, x<sub>B</sub>) to the point where the rectifying line meets the q-line, so it needs no new input: R, q and the compositions already fix it.',
+      todo: () => '<b>Watch:</b> change q or R and see how the stripping line follows. Its slope L̄/V̄ is above 1, and V̄/B is the boil-up ratio the reboiler must deliver.',
+      eq: () => [T`y_{m+1}=\frac{\bar L}{\bar V}\,x_m-\frac{B\,x_B}{\bar V}`, T`\bar L=L+qF=${f(C.Ls, 2)},\quad \bar V=V-(1-q)F=${f(C.Vs, 2)}`, T`y_{m+1}=${f(C.Ls / C.Vs, 4)}\,x_m-${f((C.B * S.xB) / C.Vs, 5)}`],
+      kv: () => [['Slope L̄/V̄', f(C.Ls / C.Vs, 4), 'b'], ['L̄ (liquid below feed)', f(C.Ls, 2) + ' kmol/h'], ['V̄ (vapor below feed)', f(C.Vs, 2) + ' kmol/h'], ['Boil-up ratio V̄/B', f(C.Vs / C.B, 3)]]
+    },
+    6: {
+      title: 'Step off the stages',
+      text: () => 'Start at (x<sub>D</sub>, x<sub>D</sub>). A horizontal move to the ' + (S.E < 1 ? 'dashed pseudo-equilibrium curve' : 'equilibrium curve') + ' is one ' + (S.E < 1 ? 'real tray' : 'equilibrium stage') + ': vapor y<sub>n</sub> and liquid x<sub>n</sub> leave it. A vertical move to the operating line is the mass balance to the stage below (x<sub>n</sub> → y<sub>n+1</sub>). Change to the stripping line once a step passes the intersection: that stage is the feed stage (thick step).',
+      todo: () => '<b>Do:</b> add stages one at a time and count them. Stop when x<sub>n</sub> ≤ x<sub>B</sub>; the last stage is the partial reboiler.' + (S.cond === 'partial' ? ' With a partial condenser, stage 1 is the condenser.' : ''),
+      eq: () => [T`\text{equilibrium: } y_n=y^*(x_n)`, T`\text{balance: } y_{n+1}=\begin{cases}\frac{R}{R+1}x_n+\frac{x_D}{R+1} & n<N_F\\[2pt] \frac{\bar L}{\bar V}x_n-\frac{Bx_B}{\bar V} & n\ge N_F\end{cases}`].concat(S.E < 1 ? [T`E_{MV}=\frac{y_n-y_{n+1}}{y_n^*-y_{n+1}}=${f(S.E, 2)}`] : []),
+      kv: () => {
+        const a = aspenNums();
+        return [
+          [S.E < 1 ? 'Real trays incl. reboiler' : 'Equilibrium stages N (incl. reboiler)', isFinite(C.st.N) ? String(C.st.N) : '∞ (pinch)', 's ans'],
+          ['Fractional count', f(C.st.frac, 2), 'ans'],
+          ['Feed stage N<sub>F</sub> (from top)', C.st.feed ? String(C.st.feed) : '–', 'f ans'],
+          ['Aspen RadFrac NSTAGE', isFinite(a.NST) ? String(a.NST) : '–', 'ans'],
+          ['Aspen feed stage', isFinite(a.NF) ? String(a.NF) : '–', 'ans']
+        ];
+      }
+    }
+  };
+  const nameL = () => (DATA && S.src === 'data' ? cap(DATA.light) : 'the light key');
+  const nameH = () => (DATA && S.src === 'data' ? cap(DATA.heavy) : 'the heavy key');
+  const seriesTxt = () => (DATA && S.src === 'data' && DATA.fixedUnit ? fmtG(DATA.series[S.si].value) + ' ' + unitLabel(DATA.fixedUnit) : '');
+
+  function kvHTML(rows) {
+    return rows.map((r) => '<div><dt>' + r[0] + '</dt><dd class="' + (r[2] || '') + '">' + r[1] + '</dd></div>').join('');
+  }
+
+  function alerts() {
+    const a = [];
+    if (C.below !== null) a.push('The equilibrium curve drops below the diagonal near x = ' + C.below.toFixed(3) + ' (azeotrope or bad data). A distillate above that composition cannot be reached.');
+    if (!C.L.ok) a.push('The operating lines do not meet between x_B and x_D. Raise R or change q.');
+    else if (C.Vs <= 0) a.push('V̄ ≤ 0: with this much vapor in the feed, the reflux is too low to give any vapor below the feed. Raise R or raise q.');
+    else if (!C.feas) a.push('R is below R_min = ' + f(C.Rmin, 3) + ': an operating line crosses the equilibrium curve, so no number of stages reaches the specification.');
+    if (S.step >= 6 && C.st.status !== 'ok' && C.L.ok && C.feas) a.push(S.feedMode === 'spec' ? 'With the feed on stage ' + S.Nf + ' the steps pinch before x_B is reached. Move the feed stage.' : 'The steps pinch before x_B is reached.');
+    if (S.step >= 6 && S.feedMode === 'spec' && C.st.status === 'ok' && C.st.feed === null) a.push('The column reaches x_B before stage ' + S.Nf + ', so the feed stage is below the reboiler. Choose a lower stage number.');
+    return a.map((t) => t.replace(/x_B/g, 'x<sub>B</sub>').replace(/x_D/g, 'x<sub>D</sub>').replace(/R_min/g, 'R<sub>min</sub>')).join('<br>');
+  }
+
+  function renderReadout() {
+    const st = STEPS[S.step];
+    $('stepKicker').textContent = 'Step ' + S.step + ' of 6';
+    $('stepTitle').textContent = st.title;
+    $('stepText').innerHTML = st.text();
+    $('stepTodo').innerHTML = st.todo();
+    const box = $('stepEq'); box.innerHTML = '';
+    for (const e of st.eq()) { const d = document.createElement('div'); box.appendChild(d); tex(d, e); }
+    $('stepKv').innerHTML = kvHTML(st.kv());
+    $('alert').innerHTML = alerts();
+    $('stageCtl').hidden = S.step !== 6;
+    $('stCount').textContent = S.hide ? String(stagesToDraw()) : stagesToDraw() + ' / ' + (C.st.stages.length || 0);
+    $('prevBtn').disabled = S.step === 1;
+    $('nextBtn').disabled = S.step === 6;
+    const a = aspenNums();
+    $('sumKv').innerHTML = kvHTML([
+      ['D / B', f(C.D, 2) + ' / ' + f(C.B, 2) + ' kmol/h'],
+      ['R / R<sub>min</sub>', f(S.R, 3) + ' / <span class="ans">' + f(C.Rmin, 3) + '</span>'],
+      ['Boil-up ratio V̄/B', f(C.Vs / C.B, 3)],
+      ['N (graphical, incl. reboiler)', '<span class="ans">' + (isFinite(C.st.N) ? C.st.N + ' (' + f(C.st.frac, 2) + ')' : '∞') + '</span>', 's'],
+      ['Optimal / used feed stage', '<span class="ans">' + (C.st.feed || '–') + '</span>', 'f'],
+      ['N<sub>min</sub>: stepped / Fenske', '<span class="ans">' + f(C.tot.frac, 2) + ' / ' + f(C.NminF, 2) + '</span>'],
+      ['N from Gilliland (shortcut)', '<span class="ans">' + f(C.NG, 1) + '</span>'],
+      ['Aspen NSTAGE / feed stage', '<span class="ans">' + (isFinite(a.NST) ? a.NST : '–') + ' / ' + (isFinite(a.NF) ? a.NF : '–') + '</span>']
+    ]);
+  }
+
+  function renderTable() {
+    const rows = [], stg = C.st.stages, add = S.cond === 'total' ? 1 : 0;
+    const hasT = S.src === 'data' && DATA && DATA.kind === 'Txy';
+    rows.push('<thead><tr><th>Stage</th><th>Aspen stage</th><th>Section</th><th>x<sub>n</sub> (liquid)</th><th>y<sub>n</sub> (vapor)</th><th>y<sub>n+1</sub> (from below)</th>' + (hasT ? '<th>T<sub>n</sub> (' + esc(Tu()) + ')</th>' : '') + '</tr></thead><tbody>');
+    if (S.cond === 'total') rows.push('<tr><td>Condenser</td><td>1</td><td class="sec-C">total condenser</td><td>' + fx(S.xD) + '</td><td>–</td><td>' + fx(S.xD) + '</td>' + (hasT ? '<td>' + f(Tat(S.xD, 'bub'), 1) + '</td>' : '') + '</tr>');
+    stg.forEach((g, i) => {
+      const last = i === stg.length - 1 && C.st.status === 'ok';
+      const feed = C.st.feed === g.n;
+      let sec = g.sec === 'S' ? 'stripping' : 'rectifying';
+      if (feed) sec = 'feed stage';
+      if (last) sec = 'reboiler';
+      if (g.n === 1 && S.cond === 'partial') sec = 'partial condenser';
+      rows.push('<tr class="' + (feed ? 'feedrow' : '') + '"><td>' + g.n + '</td><td>' + (g.n + add) + '</td><td class="sec-' + (feed ? 'C' : g.sec) + '">' + sec + '</td><td>' + fx(g.x) + '</td><td>' + fx(g.y) + '</td><td>' + (last ? '–' : fx(g.yNext)) + '</td>' + (hasT ? '<td>' + f(Tat(g.x, 'bub'), 1) + '</td>' : '') + '</tr>');
+    });
+    rows.push('</tbody>');
+    $('stageTable').innerHTML = rows.join('');
+    $('tableSub').innerHTML = '<span class="ans">' + (isFinite(C.st.N) ? C.st.N + ' stages, feed on stage ' + (C.st.feed || '–') : 'no solution at this reflux') + '</span>';
+    $('tableNote').innerHTML = 'Liquid x<sub>n</sub> and vapor y<sub>n</sub> leave stage n; y<sub>n+1</sub> is the vapor rising from the stage below (operating line). ' + (hasT ? 'T<sub>n</sub> is the bubble point of x<sub>n</sub> from the T-x-y data, to compare with the Aspen RadFrac temperature profile. ' : '') + 'Aspen stage = stage + ' + add + (S.cond === 'total' ? ' (total condenser is Aspen stage 1).' : ' (partial condenser is stage 1 in both).');
+  }
+
+  function eqSheet() {
+    const L = C.L, a = aspenNums();
+    const cards = [
+      { n: 1, s: 1, h: 'Relative volatility', p: 'How much richer the vapor is in the light key. α = 1 means no separation by distillation.',
+        g: [T`\alpha=\frac{y^*/x}{(1-y^*)/(1-x)}\qquad y^*=\frac{\alpha x}{1+(\alpha-1)x}`],
+        l: [T`\alpha_D=${f(C.aD, 3)},\ \alpha_F=${f(C.aF, 3)},\ \alpha_B=${f(C.aB, 3)}`] },
+      { n: 2, s: 2, h: 'Overall mass balance', p: 'Total and light-key balances over the whole column fix the product flows.',
+        g: [T`F=D+B\qquad F z_F=D x_D+B x_B`, T`D=F\,\frac{z_F-x_B}{x_D-x_B}`],
+        l: [T`D=${f(S.F, 1)}\cdot\frac{${fx(S.zF)}-${fx(S.xB)}}{${fx(S.xD)}-${fx(S.xB)}}=${f(C.D, 2)},\ \ B=${f(C.B, 2)}`, T`\text{recovery}=\frac{D x_D}{F z_F}=${f(100 * C.recL, 2)}\,\%`] },
+      { n: 3, s: 3, h: 'Feed quality and q-line', p: 'q from the feed enthalpy. Subcooled: q > 1. Superheated: q < 0. λ is the molar heat of vaporization.',
+        g: [T`q=\frac{H_V-H_F}{H_V-H_L}\qquad y=\frac{q}{q-1}x-\frac{z_F}{q-1}`, T`\text{subcooled: } q=1+\frac{c_{p,L}(T_{bub}-T_F)}{\lambda}\qquad \text{superheated: } q=-\frac{c_{p,V}(T_F-T_{dew})}{\lambda}`],
+        l: [Math.abs(S.q - 1) < 1e-9 ? T`q=1\ \Rightarrow\ x=z_F=${fx(S.zF)}` : T`q=${f(S.q, 3)}:\ \ y=${f(S.q / (S.q - 1), 3)}\,x ${S.zF / (S.q - 1) > 0 ? '-' : '+'} ${f(Math.abs(S.zF / (S.q - 1)), 4)}`].concat(isFinite(Tat(S.zF, 'bub')) ? [T`T_{bub}(z_F)=${f(Tat(S.zF, 'bub'), 1)}${TuTex()},\ \ T_{dew}(z_F)=${f(Tat(S.zF, 'dew'), 1)}${TuTex()}`] : []) },
+      { n: 4, s: 4, h: 'Rectifying line', p: 'Light-key balance around the condenser and stages 1…n, with L = RD and V = (R+1)D.',
+        g: [T`y_{n+1}=\frac{L}{V}x_n+\frac{D x_D}{V}=\frac{R}{R+1}x_n+\frac{x_D}{R+1}`, T`x_\cap=\frac{(R+1)z_F+(q-1)x_D}{R+q}`],
+        l: [T`y_{n+1}=${f(L.sR, 4)}\,x_n+${f(L.bR, 4)}`, T`L=${f(C.Lr, 2)},\ V=${f(C.V, 2)},\ x_\cap=${fx(L.xi)},\ y_\cap=${fx(L.yi)}`] },
+      { n: 5, s: 5, h: 'Stripping line', p: 'Light-key balance around the reboiler and stages m…N. The feed changes the flows by qF (liquid) and (1−q)F (vapor).',
+        g: [T`\bar L=L+qF\qquad \bar V=V-(1-q)F`, T`y_{m+1}=\frac{\bar L}{\bar V}x_m-\frac{B x_B}{\bar V}\qquad \frac{\bar V}{B}=\text{boil-up ratio}`],
+        l: [T`\bar L=${f(C.Ls, 2)},\ \bar V=${f(C.Vs, 2)},\ \bar V/B=${f(C.Vs / C.B, 3)}`, T`y_{m+1}=${f(C.Ls / C.Vs, 4)}\,x_m-${f((C.B * S.xB) / C.Vs, 5)}`] },
+      { n: 6, s: 6, h: 'Stage stepping and tray efficiency', p: 'Each stage: equilibrium (horizontal step), then the operating line (vertical step). With E_MV < 1 the step ends on the pseudo-equilibrium curve.',
+        g: [T`y_n=y^*(x_n)\qquad y_{n+1}=\text{operating line}(x_n)`, T`E_{MV}=\frac{y_n-y_{n+1}}{y^*_n-y_{n+1}}\ \Rightarrow\ y_{pseudo}=y_{op}+E_{MV}\,(y^*-y_{op})`],
+        l: [T`E_{MV}=${f(S.E, 2)}:\ \ N=${isFinite(C.st.N) ? C.st.N : '\\infty'}\ (${f(C.st.frac, 2)}),\ \ N_F=${C.st.feed || '-'}`], ans: true },
+      { n: 7, s: 4, h: 'Minimum reflux', p: 'The reflux at which an operating line first touches the equilibrium curve (pinch). For a pinch at the feed, (x′, y′) is where the q-line meets the curve.',
+        g: [T`\frac{R_{min}}{R_{min}+1}=\frac{x_D-y'}{x_D-x'}`],
+        l: [T`R_{min}=${f(C.Rmin, 3)}\qquad R/R_{min}=${f(S.R / C.Rmin, 2)}`].concat(isFinite(C.xqe) ? [T`x'=${fx(C.xqe)},\ y'=${fx(C.eq(C.xqe))}`] : []), ans: true },
+      { n: 8, s: 6, h: 'Minimum stages (Fenske)', p: 'At total reflux both operating lines are the diagonal. Fenske gives N_min with a mean α (counting the reboiler as a stage).',
+        g: [T`N_{min}=\frac{\ln\!\left[\frac{x_D}{1-x_D}\cdot\frac{1-x_B}{x_B}\right]}{\ln\alpha_{avg}}\qquad \alpha_{avg}=\sqrt{\alpha_D\,\alpha_B}`],
+        l: [T`\alpha_{avg}=${f(C.aAvg, 3)},\ \ N_{min}=${f(C.NminF, 2)}\ \ (\text{stepped: }${f(C.tot.frac, 2)})`], ans: true },
+      { n: 9, s: 6, h: 'Gilliland correlation (shortcut)', p: 'Empirical link between R and N, as used by DSTWU in Aspen Plus (Molokanov form).',
+        g: [T`X=\frac{R-R_{min}}{R+1}\qquad Y=\frac{N-N_{min}}{N+1}`, T`Y=1-\exp\!\left[\frac{1+54.4X}{11+117.2X}\cdot\frac{X-1}{\sqrt X}\right]`],
+        l: [isFinite(C.NG) ? T`X=${f((S.R - C.Rmin) / (S.R + 1), 3)},\ \ N\approx${f(C.NG, 1)}\ \ (\text{graphical: }${f(C.st.frac, 2)})` : T`R\le R_{min}:\ \text{no finite }N`], ans: true },
+      { n: 10, s: 6, h: 'From McCabe-Thiele to Aspen RadFrac', p: 'RadFrac counts the condenser as stage 1 and the reboiler as the last stage.',
+        g: [T`\text{total condenser: }\ N_{RadFrac}=N+1,\ \ N_{F,RadFrac}=N_F+1`, T`\text{partial condenser: }\ N_{RadFrac}=N,\ \ N_{F,RadFrac}=N_F`],
+        l: [T`N_{RadFrac}=${isFinite(a.NST) ? a.NST : '-'},\ \ N_{F,RadFrac}=${isFinite(a.NF) ? a.NF : '-'}`], ans: true },
+      { n: 11, s: 2, h: 'Mass fraction to mole fraction', p: 'Aspen specs are often in mass fraction. M is the molar mass (methanol 32.04, water 18.02 g/mol).',
+        g: [T`x_1=\frac{w_1/M_1}{w_1/M_1+(1-w_1)/M_2}`],
+        l: [T`\text{e.g. }w=0.997:\ x=\frac{0.997/32.04}{0.997/32.04+0.003/18.02}=0.9947`] }
+    ];
+    const sheet = $('eqSheet'); sheet.innerHTML = '';
+    for (const c of cards) {
+      const el = document.createElement('div'); el.className = 'eqcard' + (c.s === S.step ? ' hl' : '');
+      el.innerHTML = '<h3><span class="n">' + c.n + '</span>' + esc(c.h) + '</h3><p>' + esc(c.p) + '</p>';
+      for (const g of c.g) { const d = document.createElement('div'); d.className = 'eqline'; el.appendChild(d); tex(d, g); }
+      const lv = document.createElement('div'); lv.className = 'live' + (c.ans ? ' ans' : ''); el.appendChild(lv);
+      for (const l of c.l) { const d = document.createElement('div'); d.className = 'eqline'; lv.appendChild(d); tex(d, l); }
+      sheet.appendChild(el);
+    }
+  }
+
+  function legend() {
+    const sw = (cls, dash) => '<svg width="24" height="10"><line x1="1" y1="5" x2="23" y2="5" class="' + cls + '"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/></svg>';
+    const items = [[sw('eqc'), 'Equilibrium y*'], [sw('diag'), 'y = x']];
+    if (S.step >= 3) items.push([sw('ql'), 'q-line']);
+    if (S.step >= 4) items.push([sw('rl'), 'Rectifying'], [sw('rmin'), 'R<sub>min</sub> line']);
+    if (S.step >= 5) items.push([sw('sl'), 'Stripping']);
+    if (S.step >= 6) { items.push([sw('stp'), 'Stages']); if (S.E < 1) items.push([sw('eqp'), 'Pseudo-equilibrium (E<sub>MV</sub>)']); }
+    $('legend').innerHTML = items.map((i) => '<span>' + i[0] + i[1] + '</span>').join('');
+  }
+
+  // ================= controls sync =================
+  const NUMS = { zF: 3, xD: 4, xB: 4, q: 2, R: 3, E: 2, alpha: 2 };
+  function syncAll() {
+    for (const k of Object.keys(NUMS)) {
+      const r = $(k + '-r'), n = $(k + '-n');
+      if (r && document.activeElement !== r) r.value = String(S[k]);
+      if (n && document.activeElement !== n) n.value = String(Number(S[k].toFixed(NUMS[k])));
+    }
+    if (document.activeElement !== $('F-n')) $('F-n').value = String(S.F);
+    if (document.activeElement !== $('Nf-n')) $('Nf-n').value = String(S.Nf);
+    $('Nf-n').hidden = S.feedMode !== 'spec';
+    $('ctl-series').hidden = S.src !== 'data' || !DATA || DATA.series.length < 2;
+    $('ctl-alpha').hidden = S.src !== 'alpha';
+    $('lightName').textContent = S.src === 'data' && DATA ? cap(DATA.light) + ' (vs ' + cap(DATA.heavy) + ')' : 'light key (constant α)';
+    $('st' + S.step).checked = true;
+    const pair = S.src === 'data' && DATA ? cap(DATA.light) + '–' + cap(DATA.heavy) : 'Constant-α';
+    $('title').textContent = 'McCabe-Thiele Method · ' + pair;
+    document.body.classList.toggle('hide-ans', S.hide);
+    update(true);
+  }
+
+  let rafPending = false, fullPending = false, sheetTimer = 0;
+  function request(full) {
+    fullPending = fullPending || full;
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => { rafPending = false; const fu = fullPending; fullPending = false; update(fu); });
+  }
+  function update(full) {
+    compute();
+    layout();
+    drawStatic();
+    drawDynamic();
+    legend();
+    renderReadout();
+    for (const k of Object.keys(NUMS)) {
+      const r = $(k + '-r'), n = $(k + '-n');
+      if (r && document.activeElement !== r) r.value = String(S[k]);
+      if (n && document.activeElement !== n) n.value = String(Number(S[k].toFixed(NUMS[k])));
+    }
+    clearTimeout(sheetTimer);
+    const heavy = () => { renderTable(); eqSheet(); };
+    if (full) heavy(); else sheetTimer = setTimeout(heavy, 160);
+  }
+
+  function bindNum(k, lo, hi, after) {
+    const r = $(k + '-r'), n = $(k + '-n');
+    const set = (v, src) => {
+      v = parseFloat(v); if (!isFinite(v)) return;
+      v = clamp(v, lo(), hi());
+      S[k] = v; if (after) after();
+      if (src !== r && r) r.value = String(v);
+      request(src === n);
+    };
+    if (r) r.addEventListener('input', () => set(r.value, r));
+    if (r) r.addEventListener('change', () => request(true));
+    if (n) n.addEventListener('change', () => { set(n.value, n); n.value = String(Number(S[k].toFixed(NUMS[k]))); });
+  }
+  bindNum('zF', () => S.xB + 0.005, () => S.xD - 0.005);
+  bindNum('xD', () => S.zF + 0.005, () => 0.9999);
+  bindNum('xB', () => 0.0001, () => S.zF - 0.005);
+  bindNum('q', () => -5, () => 5);
+  bindNum('R', () => 0.01, () => 100);
+  bindNum('E', () => 0.1, () => 1);
+  bindNum('alpha', () => 1.01, () => 50);
+  $('F-n').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (isFinite(v) && v > 0) S.F = v; e.target.value = String(S.F); request(true); });
+  $('Nf-n').addEventListener('change', (e) => { const v = parseInt(e.target.value, 10); if (isFinite(v) && v >= 1) S.Nf = Math.min(v, MAXN); e.target.value = String(S.Nf); request(true); });
+
+  document.querySelectorAll('input[name="src"]').forEach((el) => el.addEventListener('change', () => { S.src = el.value; syncAll(); }));
+  document.querySelectorAll('input[name="cond"]').forEach((el) => el.addEventListener('change', () => { S.cond = el.value; request(true); }));
+  document.querySelectorAll('input[name="fm"]').forEach((el) => el.addEventListener('change', () => {
+    S.feedMode = el.value;
+    if (S.feedMode === 'spec') { // start from the optimal feed stage
+      S.feedMode = 'opt'; const c = compute(); S.Nf = c.st.feed || S.Nf; S.feedMode = 'spec';
+    }
+    syncAll();
+  }));
+  document.querySelectorAll('input[name="zoom"]').forEach((el) => el.addEventListener('change', () => { S.zoom = el.value; request(true); }));
+  document.querySelectorAll('input[name="ans"]').forEach((el) => el.addEventListener('change', () => { S.hide = el.value === 'hide'; document.body.classList.toggle('hide-ans', S.hide); request(true); }));
+  function goStep(n) {
+    n = clamp(n, 1, 6);
+    S.step = n; $('st' + n).checked = true; request(true);
+  }
+  document.querySelectorAll('input[name="step"]').forEach((el) => el.addEventListener('change', () => goStep(+el.value)));
+  $('prevBtn').addEventListener('click', () => goStep(S.step - 1));
+  $('nextBtn').addEventListener('click', () => goStep(S.step + 1));
+  $('stPlus').addEventListener('click', () => { if (S.showAll) { S.showAll = false; S.nShown = C.st.stages.length; } S.nShown = Math.min(S.nShown + 1, C.st.stages.length); request(true); });
+  $('stMinus').addEventListener('click', () => { if (S.showAll) { S.showAll = false; S.nShown = C.st.stages.length; } S.nShown = Math.max(S.nShown - 1, 0); request(true); });
+  $('stAll').addEventListener('click', () => { S.showAll = true; request(true); });
+
+  // dialogs
+  document.querySelectorAll('[data-dlg]').forEach((b) => b.addEventListener('click', () => $(b.dataset.dlg).showModal()));
+  document.querySelectorAll('dialog').forEach((d) => {
+    d.addEventListener('click', (e) => { if (e.target === d || e.target.closest('[data-close]')) d.close(); });
+  });
+
+  // data loading
+  function setStatus(m) { $('status').textContent = m || ''; }
+  $('fileInput').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setStatus('Reading ' + file.name + '…'); $('warn').textContent = '';
+    try {
+      let raw;
+      if (/\.(csv|txt|tsv)$/i.test(file.name)) raw = parseText(await file.text(), file.name);
+      else { await ensureXLSX(); const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' }); raw = parseWorkbook(wb, file.name); }
+      loadData(raw, false);
+      setStatus('Loaded ' + file.name + ': ' + cap(DATA.light) + ' (light key) and ' + cap(DATA.heavy) + '.');
+    } catch (err) { setStatus(''); $('warn').textContent = (err && err.message) || 'The file could not be read.'; }
+    e.target.value = '';
+  });
+  $('pasteGo').addEventListener('click', () => {
+    const txt = $('pasteArea').value;
+    try {
+      const raw = parseText(txt, 'pasted table');
+      loadData(raw, false);
+      $('dlg-paste').close();
+      setStatus('Loaded the pasted table: ' + cap(DATA.light) + ' (light key) and ' + cap(DATA.heavy) + '.');
+    } catch (err) { $('warn').textContent = (err && err.message) || 'The table could not be read.'; $('dlg-paste').close(); }
+  });
+  $('restoreBtn').addEventListener('click', () => { loadData(SAMPLE, true); setStatus('Restored the sample data.'); });
+
+  $('csvBtn').addEventListener('click', () => {
+    const add = S.cond === 'total' ? 1 : 0, hasT = S.src === 'data' && DATA && DATA.kind === 'Txy';
+    const out = [['stage', 'aspen_stage', 'section', 'x', 'y', 'y_next'].concat(hasT ? ['T_' + Tu().replace('°', 'deg')] : []).join(',')];
+    C.st.stages.forEach((g) => out.push([g.n, g.n + add, C.st.feed === g.n ? 'feed' : g.sec === 'S' ? 'stripping' : 'rectifying', g.x.toFixed(6), g.y.toFixed(6), g.yNext.toFixed(6)].concat(hasT ? [f(Tat(g.x, 'bub'), 2)] : []).join(',')));
+    const blob = new Blob([out.join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'mccabe-thiele-stages.csv'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  // ================= boot =================
+  loadData(SAMPLE, true);
+  if (typeof ResizeObserver === 'function') new ResizeObserver(() => request(false)).observe($('plotBox'));
+  // KaTeX loads deferred; re-render the equations once it is there
+  window.addEventListener('load', () => request(true));
+  window.__mt = { S, compute: () => compute(), get C() { return C; } };
+})();
+</script>
+</body>
+</html>
